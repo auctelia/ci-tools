@@ -4,7 +4,11 @@ function go() {
   echo "build docker image and push it"
   IMAGE_NAME=$DOCKER_REGISTRY/$GITHUB_REPOSITORY/$APP_NAME:v$VERSION_NUMBER
 
-  docker-compose --project-name app build --build-arg build_number_ci=v$VERSION_NUMBER $DCP_SERVICE_NAME
+  docker-compose --project-name app build \
+    --build-arg base_url=$BASE_URL \
+    --build-arg google_api_key=$GOOGLE_API_KEY \
+    --build-arg cdns=$CDNS \
+    --build-arg build_number_ci=v$VERSION_NUMBER $DCP_SERVICE_NAME
 
   docker-compose --project-name app run $DCP_SERVICE_NAME npm run generate --fail-on-error
 
