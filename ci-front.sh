@@ -6,7 +6,7 @@ function go() {
 
   docker-compose --project-name app build --build-arg build_number_ci=v$VERSION_NUMBER $DCP_SERVICE_NAME
 
-  docker-compose --project-name app run $DCP_SERVICE_NAME nuxt generate --fail-on-error
+  docker-compose --project-name app run $DCP_SERVICE_NAME npm run generate --fail-on-error
 
   if [ -n "$TESTS_ENABLED" ]; then
     if docker-compose --project-name app run $DCP_SERVICE_NAME npm test; then
