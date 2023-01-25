@@ -27,7 +27,7 @@ function go() {
         --rm \
         -e SONAR_HOST_URL="${SONAR_HOST_URL}" \
         -e SONAR_TOKEN="${SONAR_TOKEN}" \
-        -e SONAR_SCANNER_OPTS="-Dsonar.projectVersion=v${VERSION_NUMBER}" \
+        -e SONAR_SCANNER_OPTS="-Dsonar.projectVersion=v${VERSION_NUMBER} -Dsonar.projectKey=${GITHUB_REPOSITORY_OWNER}_${APP_NAME} -Dsonar.sources=src -Dsonar.language=js" \
         -v "${GITHUB_WORKSPACE}:/usr/src" \
         sonarsource/sonar-scanner-cli
   fi
