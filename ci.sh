@@ -20,6 +20,18 @@ function go() {
     exit 1;
   fi
 
+  if [ -n "$SONAQUBE" ]
+    then
+      echo 'Run SonarQube analyzer'
+      docker run \
+        --rm \
+        -e SONAR_HOST_URL="${SONAR_HOST_URL}" \
+        -e SONAR_TOKEN="${SONAR_TOKEN}" \
+        -e SONAR_SCANNER_OPTS="-Dsonar.projectVersion=v${VERSION_NUMBER}" \
+        -v "${GITHUB_WORKSPACE}:/usr/src" \
+        sonarsource/sonar-scanner-cli
+  fi
+
   docker tag app_$DCP_SERVICE_NAME $IMAGE_NAME
   docker login https://$DOCKER_REGISTRY --username $DOCKER_USERNAME --password $DOCKER_PASSWORD
   docker push $IMAGE_NAME
@@ -45,6 +57,11 @@ while test $# -gt 0; do
     --wait-databases*)
       echo "Script will wait for db to start"
       export WAIT_DATABASES=`echo $2 | sed -e 's/^[^=]*=//g'`
+      shift
+      ;;
+    --sonarqube*)
+      echo "We will run sonarqube"
+      export SONAQUBE=`echo $2 | sed -e 's/^[^=]*=//g'`
       shift
       ;;
     --app-name*)
