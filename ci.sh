@@ -29,7 +29,7 @@ function go() {
 
       if [ -n "$GITHUB_BASE_REF" ]
         then
-          SONAR_OPTS="${SONAR_OPTS} -Dsonar.pullrequest.branch=$GITHUB_HEAD_REF -Dsonar.pullrequest.key=$GITHUB_PR_NUMBER -Dsonar.pullrequest.base=$GITHUB_BASE_REF"
+          SONAR_OPTS="${SONAR_OPTS} -Dsonar.pullrequest.branch=$GITHUB_HEAD_REF -Dsonar.pullrequest.key=$GITHUB_PR_NUMBER -Dsonar.pullrequest.base=$GITHUB_BASE_REF -Dsonar.pullrequest.github.repository=$GITHUB_REPOSITORY -Dsonar.pullrequest.provider=github"
       fi
 
       echo "${SONAR_OPTS}"
@@ -43,9 +43,14 @@ function go() {
         sonarsource/sonar-scanner-cli
   fi
 
-  docker tag app_$DCP_SERVICE_NAME $IMAGE_NAME
-  docker login https://$DOCKER_REGISTRY --username $DOCKER_USERNAME --password $DOCKER_PASSWORD
-  docker push $IMAGE_NAME
+  if [ -z "$BYPASS_PUSH" ]
+    then
+      docker tag app_$DCP_SERVICE_NAME $IMAGE_NAME
+      docker login https://$DOCKER_REGISTRY --username $DOCKER_USERNAME --password $DOCKER_PASSWORD
+      docker push $IMAGE_NAME
+    else
+      echo 'We bypass the docker image push'
+  fi
 }
 
 FUNCTION=$1
@@ -73,6 +78,11 @@ while test $# -gt 0; do
     --sonarqube*)
       echo "We will run sonarqube"
       export SONAQUBE=`echo $2 | sed -e 's/^[^=]*=//g'`
+      shift
+      ;;
+    --bypass-push*)
+      echo "We will bypass docker push"
+      export BYPASS_PUSH=`echo $2 | sed -e 's/^[^=]*=//g'`
       shift
       ;;
     --app-name*)
