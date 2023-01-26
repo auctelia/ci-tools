@@ -25,11 +25,13 @@ function go() {
       echo 'We get full git history for SonarQube'
       git fetch --prune --unshallow
 
-      SONAR_OPTS="-Dsonar.projectVersion=v${VERSION_NUMBER} -Dsonar.projectKey=${GITHUB_REPOSITORY_OWNER}_${APP_NAME} -Dsonar.sources=src -Dsonar.scm.provider=git -Dsonar.branch.name=$GITHUB_HEAD_REF -Dsonar.javascript.lcov.reportPaths=./coverage/lcov.info"
+      SONAR_OPTS="-Dsonar.projectVersion=v${VERSION_NUMBER} -Dsonar.projectKey=${GITHUB_REPOSITORY_OWNER}_${APP_NAME} -Dsonar.sources=src -Dsonar.scm.provider=git -Dsonar.javascript.lcov.reportPaths=./coverage/lcov.info"
 
       if [ -n "$GITHUB_BASE_REF" ]
         then
           SONAR_OPTS="${SONAR_OPTS} -Dsonar.pullrequest.branch=$GITHUB_HEAD_REF -Dsonar.pullrequest.key=$GITHUB_PR_NUMBER -Dsonar.pullrequest.base=$GITHUB_BASE_REF -Dsonar.pullrequest.github.repository=$GITHUB_REPOSITORY -Dsonar.pullrequest.provider=github"
+        else
+          SONAR_OPTS="${SONAR_OPTS} -Dsonar.branch.name=$GITHUB_HEAD_REF"
       fi
 
       echo "${SONAR_OPTS}"
