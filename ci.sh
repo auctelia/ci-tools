@@ -25,13 +25,27 @@ function go() {
       echo 'We get full git history for SonarQube'
       git fetch --prune --unshallow
 
-      SONAR_OPTS="-Dsonar.projectVersion=v${VERSION_NUMBER} -Dsonar.projectKey=${GITHUB_REPOSITORY_OWNER}_${APP_NAME} -Dsonar.sources=src -Dsonar.scm.provider=git -Dsonar.javascript.lcov.reportPaths=./coverage/lcov.info"
+      BRANCH_NAME=""
+
+      if [ -n "$GITHUB_HEAD_REF" ]
+        then
+          BRANCH_NAME=$GITHUB_HEAD_REF
+        else
+          BRANCH_NAME=${GITHUB_REF##*/}
+      fi
+
+      SONAR_OPTS="-Dsonar.projectKey=${GITHUB_REPOSITORY_OWNER}_${APP_NAME} -Dsonar.sources=src -Dsonar.scm.provider=git -Dsonar.javascript.lcov.reportPaths=./coverage/lcov.info"
 
       if [ -n "$GITHUB_BASE_REF" ]
         then
           SONAR_OPTS="${SONAR_OPTS} -Dsonar.pullrequest.branch=$GITHUB_HEAD_REF -Dsonar.pullrequest.key=$GITHUB_PR_NUMBER -Dsonar.pullrequest.base=$GITHUB_BASE_REF -Dsonar.pullrequest.github.repository=$GITHUB_REPOSITORY -Dsonar.pullrequest.provider=github"
         else
-          SONAR_OPTS="${SONAR_OPTS} -Dsonar.branch.name=$GITHUB_HEAD_REF"
+          SONAR_OPTS="${SONAR_OPTS} -Dsonar.branch.name=$BRANCH_NAME"
+      fi
+
+      if [ "$BRANCH_NAME" = "master" ] || [ "$BRANCH_NAME" = "main" ]
+        then
+          SONAR_OPTS="${SONAR_OPTS} -Dsonar.projectVersion=v${VERSION_NUMBER}"
       fi
 
       echo "${SONAR_OPTS}"
