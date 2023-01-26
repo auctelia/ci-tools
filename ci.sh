@@ -22,12 +22,18 @@ function go() {
 
   if [ -n "$SONAQUBE" ]
     then
+      if [ -n "$GITHUB_BASE_REF" ]
+        then
+          SONAR_OPTS="-Dsonar.projectVersion=v${VERSION_NUMBER} -Dsonar.projectKey=${GITHUB_REPOSITORY_OWNER}_${APP_NAME} -Dsonar.sources=src -Dsonar.javascript.lcov.reportPaths=./coverage/lcov.info -Dsonar.pullrequest.branch=$GITHUB_HEAD_REF -Dsonar.pullrequest.key=$GITHUB_PR_NUMBER -Dsonar.pullrequest.base=$GITHUB_BASE_REF"
+        else
+          SONAR_OPTS="-Dsonar.projectVersion=v${VERSION_NUMBER} -Dsonar.projectKey=${GITHUB_REPOSITORY_OWNER}_${APP_NAME} -Dsonar.sources=src -Dsonar.javascript.lcov.reportPaths=./coverage/lcov.info"
+      fi
       echo 'Run SonarQube analyzer'
       docker run \
         --rm \
         -e SONAR_HOST_URL="${SONAR_HOST_URL}" \
         -e SONAR_TOKEN="${SONAR_TOKEN}" \
-        -e SONAR_SCANNER_OPTS="-Dsonar.projectVersion=v${VERSION_NUMBER} -Dsonar.projectKey=${GITHUB_REPOSITORY_OWNER}_${APP_NAME} -Dsonar.sources=src -Dsonar.javascript.lcov.reportPaths=./coverage/lcov.info" \
+        -e SONAR_SCANNER_OPTS="${SONAR_OPTS}" \
         -v "${GITHUB_WORKSPACE}:/usr/src" \
         sonarsource/sonar-scanner-cli
   fi
