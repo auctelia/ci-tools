@@ -24,10 +24,12 @@ function go() {
     then
       if [ -n "$GITHUB_BASE_REF" ]
         then
-          SONAR_OPTS="-Dsonar.projectVersion=v${VERSION_NUMBER} -Dsonar.projectKey=${GITHUB_REPOSITORY_OWNER}_${APP_NAME} -Dsonar.sources=src -Dsonar.javascript.lcov.reportPaths=./coverage/lcov.info -Dsonar.pullrequest.branch=$GITHUB_HEAD_REF -Dsonar.pullrequest.key=$GITHUB_PR_NUMBER -Dsonar.pullrequest.base=$GITHUB_BASE_REF"
+          SONAR_OPTS="-Dsonar.projectVersion=v${VERSION_NUMBER} -Dsonar.projectKey=${GITHUB_REPOSITORY_OWNER}_${APP_NAME} -Dsonar.sources=src -Dsonar.javascript.lcov.reportPaths=./coverage/lcov.info -Dsonar.branch.name=$GITHUB_HEAD_REF -Dsonar.pullrequest.branch=$GITHUB_HEAD_REF -Dsonar.pullrequest.key=$GITHUB_PR_NUMBER -Dsonar.pullrequest.base=$GITHUB_BASE_REF"
         else
-          SONAR_OPTS="-Dsonar.projectVersion=v${VERSION_NUMBER} -Dsonar.projectKey=${GITHUB_REPOSITORY_OWNER}_${APP_NAME} -Dsonar.sources=src -Dsonar.javascript.lcov.reportPaths=./coverage/lcov.info"
+          SONAR_OPTS="-Dsonar.projectVersion=v${VERSION_NUMBER} -Dsonar.projectKey=${GITHUB_REPOSITORY_OWNER}_${APP_NAME} -Dsonar.sources=src -Dsonar.branch.name=$GITHUB_HEAD_REF -Dsonar.javascript.lcov.reportPaths=./coverage/lcov.info"
       fi
+
+      echo "${SONAR_OPTS}"
       echo 'Run SonarQube analyzer'
       docker run \
         --rm \
