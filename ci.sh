@@ -25,6 +25,7 @@ function go() {
       echo 'We get full git history for SonarQube'
       git fetch --prune --unshallow
 
+      REPOSITORY_NAME=${GITHUB_REPOSITORY##*/}
       BRANCH_NAME=""
 
       if [ -n "$GITHUB_HEAD_REF" ]
@@ -34,7 +35,7 @@ function go() {
           BRANCH_NAME=${GITHUB_REF##*/}
       fi
 
-      SONAR_OPTS="-Dsonar.organization=auctelia -Dsonar.projectKey=${GITHUB_REPOSITORY_OWNER}_${APP_NAME} -Dsonar.sources=src -Dsonar.scm.provider=git -Dsonar.javascript.lcov.reportPaths=./coverage/lcov.info"
+      SONAR_OPTS="-Dsonar.organization=auctelia -Dsonar.projectKey=${GITHUB_REPOSITORY_OWNER}_${REPOSITORY_NAME} -Dsonar.sources=src -Dsonar.scm.provider=git -Dsonar.javascript.lcov.reportPaths=./coverage/lcov.info"
 
       if [ -n "$GITHUB_BASE_REF" ]
         then
