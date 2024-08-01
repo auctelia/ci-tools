@@ -3,18 +3,18 @@
 function go() {
   IMAGE_NAME=$DOCKER_REGISTRY/$GITHUB_REPOSITORY/$APP_NAME:v$VERSION_NUMBER
 
-  docker-compose --project-name app build --build-arg build_number_ci=v$VERSION_NUMBER $DCP_SERVICE_NAME
+  docker compose --project-name app build --build-arg build_number_ci=v$VERSION_NUMBER $DCP_SERVICE_NAME
 
   if [ -n "$WAIT_DATABASES" ]
     then
       echo 'Pre-run databases'
-      docker-compose --project-name app up -d $WAIT_DATABASES
+      docker compose --project-name app up -d $WAIT_DATABASES
 
       echo 'Wait for databases';
-      docker-compose --project-name app up waithosts
+      docker compose --project-name app up waithosts
   fi
 
-  if docker-compose --project-name app run $DCP_SERVICE_NAME npm test; then
+  if docker compose --project-name app run $DCP_SERVICE_NAME npm test; then
     echo 'Test Success';
   else
     exit 1;
@@ -62,7 +62,7 @@ function go() {
 
   if [ -z "$BYPASS_PUSH" ]
     then
-      docker tag app_$DCP_SERVICE_NAME $IMAGE_NAME
+      docker tag app-$DCP_SERVICE_NAME $IMAGE_NAME
       docker login https://$DOCKER_REGISTRY --username $DOCKER_USERNAME --password $DOCKER_PASSWORD
       docker push $IMAGE_NAME
     else
@@ -161,7 +161,7 @@ case "$FUNCTION" in
 
     if [ -z "$DCP_SERVICE_NAME" ]
       then
-        echo "Docker-compose service name will be set to default: node"
+        echo "Docker compose service name will be set to default: node"
         export DCP_SERVICE_NAME="node"
     fi
 
