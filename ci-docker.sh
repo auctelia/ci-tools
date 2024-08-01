@@ -62,7 +62,7 @@ function go() {
 
   if [ -z "$BYPASS_PUSH" ]
     then
-      docker tag app_$DCP_SERVICE_NAME $IMAGE_NAME
+      docker tag app-$DCP_SERVICE_NAME $IMAGE_NAME
       docker login https://$DOCKER_REGISTRY --username $DOCKER_USERNAME --password $DOCKER_PASSWORD
       docker push $IMAGE_NAME
     else
