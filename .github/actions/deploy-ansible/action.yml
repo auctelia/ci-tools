@@ -77,6 +77,7 @@ runs:
       run: |
           sudo apt-get update
           sudo apt-get install -y openvpn ansible openssh-client
+      shell: bash
 
     - name: Set Up VPN Config
       run: |
@@ -117,12 +118,14 @@ runs:
           fi
 
           echo "Configuration VPN configurée avec succès"
+      shell: bash
 
     - name: Connect to VPN
       run: |
           sudo openvpn --config vpn.conf --daemon
           sleep 10  # Wait for VPN to establish
           ip a      # Debug: see VPN interfaces
+      shell: bash
 
     - name: Call Ansible Deployment API
       run: |
@@ -136,6 +139,7 @@ runs:
                     "docker_image": "${{ inputs.docker-image }}"
                   }
               }'
+      shell: bash
 
     - name: Stop VPN
       run: sudo killall openvpn || true
