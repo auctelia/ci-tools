@@ -152,4 +152,4 @@ runs:
           webhook-url: ${{ inputs.tars-slack-webhook-url }}
           channel: "#tars-notif-deployment"
           status: ${{ job.status }}
-          config: .github/config/slack.yml
+          config: config/slack.yml
