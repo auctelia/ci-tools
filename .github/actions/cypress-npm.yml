@@ -1,0 +1,81 @@
+name: 'Cypress Tests with Npm'
+description: 'Run Cypress E2E tests using Npm package manager'
+inputs:
+  github-token:
+    description: 'GitHub token for authentication'
+    default: ${{ github.token }}
+    required: true
+  cypress-base-url:
+    description: 'Base URL for Cypress tests'
+    default: 'http://localhost:3000'
+    required: true
+  cypress-basic-auth-username:
+    description: 'Basic auth username for Cypress tests'
+    default: ${{secrets.BASIC_AUTH_USERNAME}}
+    required: false
+  cypress-basic-auth-password:
+    description: 'Basic auth password for Cypress tests'
+    default: ${{secrets.BASIC_AUTH_PASSWORD}}
+    required: false
+  cypress-wait-time:
+    description: 'Wait time for Cypress tests'
+    default: '60000'
+    required: false
+  sentry-token:
+    description: 'Sentry token for authentication'
+    default: ${{ secrets.SENTRY_AUTH_TOKEN }}
+    required: false
+  slack-webhook-url:
+    description: 'Slack webhook URL for notifications'
+    default: ${{secrets.TARS_SLACK_WEBHOOK_URL}}
+    required: false
+  slack-channel:
+    description: 'Slack channel for notifications'
+    default: '#tars-notif-deployment'
+    required: false
+  cypress-command:
+    description: 'Cypress command to run'
+    default: 'cy:run'
+    required: false
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout the repo
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - name: Install dependencies
+      run: npm install
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+
+    - name: Install Cypress dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libgtk2.0-0 libgtk-3-0 libgbm-dev libnotify-dev libnss3 libxss1 libasound2t64 libxtst6 xauth xvfb google-chrome-stable
+      shell: bash
+
+    - name: Run Cypress tests
+      run: npm run ${{ inputs.cypress-command }}
+      shell: bash
+      env:
+        CYPRESS_BASE_URL: ${{ inputs.cypress-base-url }}
+        CYPRESS_BASIC_AUTH_USERNAME: ${{ inputs.cypress-basic-auth-username }}
+        CYPRESS_BASIC_AUTH_PASSWORD: ${{ inputs.cypress-basic-auth-password }}
+        CYPRESS_WAIT_TIME: ${{ inputs.cypress-wait-time }}
+        SENTRY_AUTH_TOKEN: ${{ inputs.sentry-token }}
+
+    - name: Send Slack Notification for Tests
+      if: always() && inputs.slack-webhook-url != ''
+      uses: act10ns/slack@v1.6.0
+      with:
+        webhook-url: ${{ inputs.slack-webhook-url }}
+        channel: ${{ inputs.slack-channel }}
+        status: ${{ job.status }}
+        config: .github/config/slack.yml
