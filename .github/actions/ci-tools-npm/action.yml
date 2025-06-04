@@ -31,17 +31,15 @@ inputs:
   sonar-active:
     description: "Enable SonarQube analysis"
     required: true
-    default: true
+    default: "true"
   sonar-token:
     description: "SonarQube token for authentication"
-    if: ${{ inputs.sonar-active == true }}
     default: ${{ secrets.SONAR_TOKEN }}
-    required: true
+    required: false
   sonar-host-url:
     description: "SonarQube host URL"
     default: ${{ secrets.SONAR_HOST_URL }}
-    if: ${{ inputs.sonar-active == true }}
-    required: true
+    required: false
 
 runs:
   using: "composite"
@@ -51,11 +49,14 @@ runs:
 
     - name: Get ci-tools script
       run: wget https://raw.githubusercontent.com/auctelia/ci-tools/master/ci.sh
+      shell: bash
 
     - name: Make ci-tools runnable
       run: chmod +x ./ci.sh
+      shell: bash
 
     - name: Run ci-tools
+      shell: bash
       run: ./ci.sh go --sonarqube=true --app-name=${{ inputs.app-name }} --docker-username=${{ inputs.docker-username }} --docker-password=${{ inputs.docker-password }} --version-number=${{ inputs.version-number }} --docker-registry=${{ inputs.docker-registry }}
       env:
         BUILD_NUMBER: ${{ inputs.version-number }}
