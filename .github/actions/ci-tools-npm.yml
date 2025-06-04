@@ -47,7 +47,7 @@ runs:
   using: "composite"
   steps:
     - name: Checkout the repo
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
 
     - name: Get ci-tools script
       run: wget https://raw.githubusercontent.com/auctelia/ci-tools/master/ci.sh
