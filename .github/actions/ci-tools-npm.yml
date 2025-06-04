@@ -1,0 +1,65 @@
+name: "CI Tools Npm"
+description: "Build and push using ci-tools"
+inputs:
+  app-name:
+    description: "Name of the application to build and push"
+    required: true
+  docker-username:
+    description: "Docker username for authentication"
+    default: ${{ github.actor }}
+    required: true
+  docker-password:
+    description: "Docker password for authentication"
+    default: ${{ secrets.DOCKER_PASSWORD }}
+    required: true
+  version-number:
+    description: "Version number for the build"
+    default: ${{ github.run_number }}
+    required: true
+  docker-registry:
+    description: "Docker registry URL. If not provided, defaults to Github Docker Hub."
+    default: "ghcr.io"
+    required: true
+  github-token:
+    description: "GitHub token for authentication"
+    default: ${{ secrets.GITHUB_TOKEN }}
+    required: true
+  sentry-token:
+    description: "Sentry token for authentication"
+    default: ${{ secrets.SENTRY_AUTH_TOKEN }}
+    required: true
+  sonar-active:
+    description: "Enable SonarQube analysis"
+    required: true
+    default: true
+  sonar-token:
+    description: "SonarQube token for authentication"
+    if: ${{ inputs.sonar-active == true }}
+    default: ${{ secrets.SONAR_TOKEN }}
+    required: true
+  sonar-host-url:
+    description: "SonarQube host URL"
+    default: ${{ secrets.SONAR_HOST_URL }}
+    if: ${{ inputs.sonar-active == true }}
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout the repo
+      uses: actions/checkout@v2
+
+    - name: Get ci-tools script
+      run: wget https://raw.githubusercontent.com/auctelia/ci-tools/master/ci.sh
+
+    - name: Make ci-tools runnable
+      run: chmod +x ./ci.sh
+
+    - name: Run ci-tools
+      run: ./ci.sh go --sonarqube=true --app-name=${{ inputs.app-name }} --docker-username=${{ inputs.docker-username }} --docker-password=${{ inputs.docker-password }} --version-number=${{ inputs.version-number }} --docker-registry=${{ inputs.docker-registry }}
+      env:
+        BUILD_NUMBER: ${{ inputs.version-number }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        SENTRY_AUTH_TOKEN: ${{ inputs.sentry-token }}
+        SONAR_TOKEN: ${{ inputs.sonar-token }}
+        SONAR_HOST_URL: ${{ inputs.sonar-host-url }}

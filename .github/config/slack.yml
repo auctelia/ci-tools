@@ -1,0 +1,57 @@
+    username: GitHub-CI
+    icon_url: https://octodex.github.com/images/mona-the-rivetertocat.png
+
+    pretext: 🚀 GitHub Actions • <{{repositoryUrl}}|{{repositoryName}}>
+    title: "{{icon jobStatus}} {{workflow}} #v{{runNumber}}"
+
+    text: |
+      📋 **Job:** `{{jobName}}` • 🎯 **Status:** {{icon jobStatus}} *{{jobStatus}}*
+      👤 **Triggered by:** {{actor}} via {{eventName}}
+      🌿 **Branch:** <{{refUrl}}|`{{ref}}`> ({{refType}})
+      {{#if description}}📝 **Changes:** <{{diffUrl}}|`{{diffRef}}`> - {{description}}{{/if}}
+      
+      {{#if payload.commits}}
+      📦 **Commits:**
+      {{#each payload.commits}}
+      • <{{this.url}}|`{{truncate this.id 8}}`> {{this.message}}
+      {{/each}}
+      {{/if}}
+      
+      {{#if steps}}
+      ⚡ **Execution Steps:**
+      {{#each steps}}
+      {{icon this.outcome}} `{{this.id}}`{{#if this.outputs.stdout}} - {{truncate this.outputs.stdout 100}}{{/if}}
+      {{/each}}
+      {{/if}}
+    
+    fallback: |-
+      🚀 [{{repositoryName}}] {{workflow}} #v{{runNumber}} - {{jobName}} is {{jobStatus}}
+    
+    fields:
+      - title: "🔗 Workflow"
+        value: "<{{workflowUrl}}|{{workflow}}>"
+        short: true
+      - title: "🆔 Run"
+        value: "<{{workflowRunUrl}}|#v{{runNumber}}>"
+        short: true
+      - title: "👤 Actor"
+        value: "{{actor}}"
+        short: true
+      - title: "⏱️ Event"
+        value: "{{eventName}}"
+        short: true
+
+    footer: "🏗️ {{repositoryName}} • ⚡ GitHub Actions"
+
+    colors:
+      success: '#28a745'
+      failure: '#dc3545'
+      cancelled: '#6c757d'
+      default: '#007bff'
+
+    icons:
+      success: ':white_check_mark:'
+      failure: ':x:'
+      cancelled: ':warning:'
+      skipped: ':fast_forward:'
+      default: ':gear:'

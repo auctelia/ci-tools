@@ -1,0 +1,151 @@
+name: 'Deploy via VPN'
+description: 'Connect to VPN and deploy Docker image via Ansible script'
+
+inputs:
+  docker-username:
+    description: "Docker username for authentication"
+    default: ${{ github.actor }}
+    required: false
+  docker-password:
+    description: "Docker password for authentication"
+    default: ${{ secrets.DOCKER_PASSWORD }}
+    required: false
+  app-name:
+    description: "Name of the application to deploy"
+    required: true
+  version-number:
+    description: "Version number for the deployment"
+    default: ${{ github.run_number }}
+    required: true
+  docker-registry:
+    description: "Docker registry URL. If not provided, defaults to Github Docker Hub."
+    default: "ghcr.io"
+    required: false
+  vpn-conf:
+    description: "VPN configuration"
+    default: ${{ secrets.VPN_CONF }}
+    required: fallse
+  vpn-client-cert:
+    description: "VPN client certificate"
+    default: ${{ secrets.VPN_CLIENT_CERT }}
+    required: false
+  vpn-client-key:
+    description: "VPN client key"
+    default: ${{ secrets.VPN_CLIENT_KEY }}
+    required: false
+  vpn-ca-cert:
+    description: "VPN CA certificate"
+    default: ${{ secrets.VPN_CA_CERT }}
+    required: false
+  vpn-ta-key:
+    description: "VPN TLS auth key"
+    default: ${{ secrets.VPN_TA_KEY }}
+    required: false
+  docker-image:
+    description: "Docker image to deploy"
+    default: "ghcr.io/${{ github.repository }}/{{ inputs.app-name }}:v${{ github.run_number }}"
+    required: false
+  awx-username:
+    description: "AWX username for authentication"
+    default: ${{ secrets.AWX_USERNAME }}
+    required: false
+  awx-password:
+    description: "AWX password for authentication"
+    default: ${{ secrets.AWX_PASSWORD }}
+    required: false
+  awx-services-id:
+    description: "AWX services ID for deployment"
+    required: true
+  tars-slack-webhook-url:
+    description: "Slack webhook URL for notifications"
+    default: ${{ secrets.TARS_SLACK_WEBHOOK_URL }}
+    required: false
+  deploy-env:
+    description: "Deployment environment (e.g., staging,test, production)"
+    default: "staging"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+          fetch-depth: 0
+
+    - name: Install Dependencies
+      run: |
+          sudo apt-get update
+          sudo apt-get install -y openvpn ansible openssh-client
+
+    - name: Set Up VPN Config
+      run: |
+          if [[ -z "${{ inputs.vpn-conf }}" ]]; then
+            echo "Erreur: L'input vpn-conf est vide ou n'existe pas"
+            exit 1
+          fi
+
+          # Écrire la configuration VPN directement (non encodée)
+          echo "${{ inputs.vpn-conf }}" > vpn.conf
+
+          # Setup certificate-based authentication for VPN
+          if [[ -n "${{ inputs.vpn-client-cert }}" && -n "${{ inputs.vpn-client-key }}" ]]; then
+            echo "${{ inputs.vpn-client-cert }}" > github.crt
+            echo "${{ inputs.vpn-client-key }}" > github.key
+            echo "cert github.crt" >> vpn.conf
+            echo "key github.key" >> vpn.conf
+            chmod 600 github.key  # Secure the private key file
+          fi
+
+          # Add CA certificate if available
+          if [[ -n "${{ inputs.vpn-ca-cert }}" ]]; then
+            echo "${{ inputs.vpn-ca-cert }}" > ca.crt
+            echo "ca ca.crt" >> vpn.conf
+          fi
+
+          # Add TLS auth key if available
+          if [[ -n "${{ inputs.vpn-ta-key }}" ]]; then
+            echo "${{ inputs.vpn-ta-key }}" > ta.key
+            echo "tls-auth ta.key 1" >> vpn.conf
+            chmod 600 ta.key  # Secure the TLS auth key file
+          fi
+
+          # Vérifier que le fichier vpn.conf a été créé
+          if [[ ! -f vpn.conf ]]; then
+            echo "Erreur: Le fichier vpn.conf n'a pas été créé"
+            exit 1
+          fi
+
+          echo "Configuration VPN configurée avec succès"
+
+    - name: Connect to VPN
+      run: |
+          sudo openvpn --config vpn.conf --daemon
+          sleep 10  # Wait for VPN to establish
+          ip a      # Debug: see VPN interfaces
+
+    - name: Call Ansible Deployment API
+      run: |
+          curl -X POST "http://ansible.cluster.auctelia.com/api/v2/job_templates/${{ inputs.awx-services-id }}/launch/" \
+            -H "Content-Type: application/json" \
+            -u "${{ inputs.awx-username }}:${{ inputs.awx-password }}" \
+            -d '{
+                  "extra_vars":{
+                    "deploy_env": "${{ inputs.deploy-env }}",
+                    "deploy_image_tag": "v${{ github.run_number }}",
+                    "docker_image": "${{ inputs.docker-image }}"
+                  }
+              }'
+
+    - name: Stop VPN
+      run: sudo killall openvpn || true
+      shell: bash
+
+    - name: Send Slack Notification for Deployment
+      id: send-slack-notification
+      uses: act10ns/slack@v1.6.0
+      with:
+          webhook-url: ${{ inputs.tars-slack-webhook-url }}
+          channel: "#tars-notif-deployment"
+          status: ${{ job.status }}
+          config: .github/config/slack.yml
