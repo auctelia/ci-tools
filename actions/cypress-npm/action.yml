@@ -9,21 +9,17 @@ inputs:
     description: 'Base URL for Cypress tests'
     default: 'http://localhost:3000'
     required: true
-  cypress-basic-auth-username:
+  basic-auth-username:
     description: 'Basic auth username for Cypress tests'
     default: ${{secrets.BASIC_AUTH_USERNAME}}
     required: false
-  cypress-basic-auth-password:
+  basic-auth-password:
     description: 'Basic auth password for Cypress tests'
     default: ${{secrets.BASIC_AUTH_PASSWORD}}
     required: false
   cypress-wait-time:
     description: 'Wait time for Cypress tests'
     default: '60000'
-    required: false
-  sentry-token:
-    description: 'Sentry token for authentication'
-    default: ${{ secrets.SENTRY_AUTH_TOKEN }}
     required: false
   slack-webhook-url:
     description: 'Slack webhook URL for notifications'
@@ -66,10 +62,9 @@ runs:
       shell: bash
       env:
         CYPRESS_BASE_URL: ${{ inputs.cypress-base-url }}
-        CYPRESS_BASIC_AUTH_USERNAME: ${{ inputs.cypress-basic-auth-username }}
-        CYPRESS_BASIC_AUTH_PASSWORD: ${{ inputs.cypress-basic-auth-password }}
+        CYPRESS_BASIC_AUTH_USERNAME: ${{ inputs.basic-auth-username }}
+        CYPRESS_BASIC_AUTH_PASSWORD: ${{ inputs.basic-auth-password }}
         CYPRESS_WAIT_TIME: ${{ inputs.cypress-wait-time }}
-        SENTRY_AUTH_TOKEN: ${{ inputs.sentry-token }}
 
     - name: Send Slack Notification for Tests
       if: always() && inputs.slack-webhook-url != ''

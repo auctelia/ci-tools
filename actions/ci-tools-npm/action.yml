@@ -1,45 +1,17 @@
-name: "CI Tools Npm"
-description: "Build and push using ci-tools"
+name: 'CI Tools Bun'
+description: 'Build and push using ci-tools'
 inputs:
   app-name:
-    description: "Name of the application to build and push"
-    required: true
-  docker-username:
-    description: "Docker username for authentication"
-    default: ${{ github.actor }}
-    required: true
-  docker-password:
-    description: "Docker password for authentication"
-    default: ${{ secrets.DOCKER_PASSWORD }}
-    required: true
-  version-number:
-    description: "Version number for the build"
-    default: ${{ github.run_number }}
-    required: true
-  docker-registry:
-    description: "Docker registry URL. If not provided, defaults to Github Docker Hub."
-    default: "ghcr.io"
+    description: 'Name of the application to build and push'
     required: true
   github-token:
-    description: "GitHub token for authentication"
-    default: ${{ secrets.GITHUB_TOKEN }}
-    required: true
-  sentry-token:
-    description: "Sentry token for authentication"
-    default: ${{ secrets.SENTRY_AUTH_TOKEN }}
+    description: 'GitHub token for authentication'
     required: true
   sonar-active:
-    description: "Enable SonarQube analysis"
+    description: 'Enable SonarQube analysis'
     required: true
-    default: "true"
-  sonar-token:
-    description: "SonarQube token for authentication"
-    default: ${{ secrets.SONAR_TOKEN }}
-    required: false
-  sonar-host-url:
-    description: "SonarQube host URL"
-    default: ${{ secrets.SONAR_HOST_URL }}
-    required: false
+    default: 'true'
+
 
 runs:
   using: "composite"
@@ -47,20 +19,26 @@ runs:
     - name: Checkout the repo
       uses: actions/checkout@v4
 
-    - name: Get ci-tools script
-      run: wget https://raw.githubusercontent.com/auctelia/ci-tools/master/ci.sh
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - name: Install dependencies
+      run: npm install
       shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+
+    - name: Get ci-tools script
+      shell: bash
+      run: wget https://raw.githubusercontent.com/auctelia/ci-tools/master/ci.sh
 
     - name: Make ci-tools runnable
-      run: chmod +x ./ci.sh
       shell: bash
+      run: chmod +x ./ci.sh
 
     - name: Run ci-tools
       shell: bash
-      run: ./ci.sh go --sonarqube=true --app-name=${{ inputs.app-name }} --docker-username=${{ inputs.docker-username }} --docker-password=${{ inputs.docker-password }} --version-number=${{ inputs.version-number }} --docker-registry=${{ inputs.docker-registry }}
+      run: ./ci.sh go --sonarqube=${{inputs.sonar-active}} --app-name=${{ inputs.app-name }} --docker-username=${{ github.actor }}  --docker-password=${{ inputs.github-token }} --version-number=$GITHUB_RUN_NUMBER --docker-registry=ghcr.io
       env:
-        BUILD_NUMBER: ${{ inputs.version-number }}
         GITHUB_TOKEN: ${{ inputs.github-token }}
-        SENTRY_AUTH_TOKEN: ${{ inputs.sentry-token }}
-        SONAR_TOKEN: ${{ inputs.sonar-token }}
-        SONAR_HOST_URL: ${{ inputs.sonar-host-url }}
