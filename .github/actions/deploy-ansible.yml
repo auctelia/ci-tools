@@ -24,7 +24,7 @@ inputs:
   vpn-conf:
     description: "VPN configuration"
     default: ${{ secrets.VPN_CONF }}
-    required: fallse
+    required: false
   vpn-client-cert:
     description: "VPN client certificate"
     default: ${{ secrets.VPN_CLIENT_CERT }}
