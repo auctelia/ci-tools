@@ -4,17 +4,15 @@ inputs:
   app-name:
     description: 'Name of the application to build and push'
     required: true
-  github-token:
-    description: 'GitHub token for authentication'
-    required: true
   sonar-active:
     description: 'Enable SonarQube analysis'
     required: true
-    default: 'true'
+  github-token:
+    description: 'GitHub token for authentication'
+    required: true
   github-run-number:
     description: 'GitHub run number for versioning'
-    required: false
-    default: '${{ github.run_number }}'
+    required: true
 
 
 runs:
