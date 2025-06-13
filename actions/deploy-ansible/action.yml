@@ -8,7 +8,7 @@ inputs:
     required: false
   docker-password:
     description: "Docker password for authentication"
-    default: ${{ secrets.DOCKER_PASSWORD }}
+    default: ${{ secrets.GITHUB_TOKEN || secrets.TARS_PAT }}
     required: false
   app-name:
     description: "Name of the application to deploy"
@@ -43,7 +43,7 @@ inputs:
     required: false
   docker-image:
     description: "Docker image to deploy"
-    default: "ghcr.io/${{ github.repository }}/{{ inputs.app-name }}:v${{ github.run_number }}"
+    default: "ghcr.io/${{ github.repository }}/{{ inputs.app-name }}:v${{ inputs.version-number}}"
     required: false
   awx-username:
     description: "AWX username for authentication"
