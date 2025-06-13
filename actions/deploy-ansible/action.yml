@@ -8,7 +8,6 @@ inputs:
     required: false
   docker-password:
     description: "Docker password for authentication"
-    default: ${{ secrets.GITHUB_TOKEN || secrets.TARS_PAT }}
     required: false
   app-name:
     description: "Name of the application to deploy"
@@ -23,43 +22,35 @@ inputs:
     required: false
   vpn-conf:
     description: "VPN configuration"
-    default: ${{ secrets.VPN_CONF }}
-    required: false
+    required: true
   vpn-client-cert:
     description: "VPN client certificate"
-    default: ${{ secrets.VPN_CLIENT_CERT }}
-    required: false
+    required: true
   vpn-client-key:
     description: "VPN client key"
-    default: ${{ secrets.VPN_CLIENT_KEY }}
-    required: false
+    required: true
   vpn-ca-cert:
     description: "VPN CA certificate"
-    default: ${{ secrets.VPN_CA_CERT }}
-    required: false
+    required: true
   vpn-ta-key:
     description: "VPN TLS auth key"
-    default: ${{ secrets.VPN_TA_KEY }}
-    required: false
+    required: true
   docker-image:
     description: "Docker image to deploy"
     default: "ghcr.io/${{ github.repository }}/{{ inputs.app-name }}:v${{ inputs.version-number}}"
     required: false
   awx-username:
     description: "AWX username for authentication"
-    default: ${{ secrets.AWX_USERNAME }}
-    required: false
+    required: true
   awx-password:
     description: "AWX password for authentication"
-    default: ${{ secrets.AWX_PASSWORD }}
-    required: false
+    required: true
   awx-services-id:
     description: "AWX services ID for deployment"
     required: true
   tars-slack-webhook-url:
     description: "Slack webhook URL for notifications"
-    default: ${{ secrets.TARS_SLACK_WEBHOOK_URL }}
-    required: false
+    required: true
   deploy-env:
     description: "Deployment environment (e.g., staging,test, production)"
     default: "staging"

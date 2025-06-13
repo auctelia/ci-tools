@@ -11,11 +11,9 @@ inputs:
     required: true
   basic-auth-username:
     description: 'Basic auth username for Cypress tests'
-    default: ${{secrets.BASIC_AUTH_USERNAME}}
     required: false
   basic-auth-password:
     description: 'Basic auth password for Cypress tests'
-    default: ${{secrets.BASIC_AUTH_PASSWORD}}
     required: false
   cypress-wait-time:
     description: 'Wait time for Cypress tests'
@@ -23,7 +21,6 @@ inputs:
     required: false
   slack-webhook-url:
     description: 'Slack webhook URL for notifications'
-    default: ${{secrets.TARS_SLACK_WEBHOOK_URL}}
     required: false
   slack-channel:
     description: 'Slack channel for notifications'

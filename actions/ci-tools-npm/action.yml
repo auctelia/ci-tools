@@ -10,7 +10,6 @@ inputs:
     required: true
   github-token:
     description: 'GitHub token for authentication'
-    default: ${{ secrets.GITHUB_TOKEN || secrets.TARS_PAT }}
     required: true
   github-run-number:
     description: 'GitHub run number for versioning'
@@ -43,6 +42,6 @@ runs:
 
     - name: Run ci-tools
       shell: bash
-      run: ./ci.sh go --sonarqube=${{inputs.sonar-active}} --app-name=${{ inputs.app-name }} --docker-username=${{ github.actor }}  --docker-password=${{ inputs.github-token }} --version-number=$GITHUB_RUN_NUMBER --docker-registry=ghcr.io
+      run: ./ci.sh go --sonarqube=${{inputs.sonar-active}} --app-name=${{ inputs.app-name }} --docker-username=${{ github.actor }}  --docker-password=${{ inputs.github-token }} --version-number=${{inputs.github-run-number}} --docker-registry=ghcr.io
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
