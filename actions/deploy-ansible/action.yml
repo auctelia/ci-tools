@@ -37,7 +37,6 @@ inputs:
     required: true
   docker-image:
     description: "Docker image to deploy"
-    default: "ghcr.io/${{ github.repository }}/{{ inputs.app-name }}:v${{ inputs.version-number}}"
     required: false
   awx-username:
     description: "AWX username for authentication"
