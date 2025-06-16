@@ -32,6 +32,10 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
 
+    - name: Lint
+      run: npm run lint
+      shell: bash
+
     - name: Get ci-tools script
       shell: bash
       run: wget https://raw.githubusercontent.com/auctelia/ci-tools/master/ci.sh

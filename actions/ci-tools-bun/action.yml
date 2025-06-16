@@ -15,7 +15,15 @@ inputs:
     description: 'GitHub run number for versioning'
     default: ${{ github.run_number }}
     required: true
-
+  sentry-auth-token:
+    description: 'Sentry authentication token'
+    required: false
+  sonar-token:
+    description: 'SonarQube token for analysis'
+    required: false
+  sonar-host-url:
+    description: 'SonarQube host URL'
+    required: false
 
 runs:
   using: "composite"
@@ -35,6 +43,10 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
+
+    - name: Lint
+      run: bun run lint
+      shell: bash
 
     - name: Get ci-tools script
       shell: bash
