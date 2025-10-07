@@ -15,6 +15,9 @@ inputs:
     description: 'GitHub run number for versioning'
     default: ${{ github.run_number }}
     required: true
+  build-params:
+    description: 'Additional build parameters'
+    required: false
 
 runs:
   using: "composite"
@@ -46,6 +49,6 @@ runs:
 
     - name: Run ci-tools
       shell: bash
-      run: ./ci.sh go --sonarqube=${{inputs.sonar-active}} --app-name=${{ inputs.app-name }} --docker-username=${{ github.actor }}  --docker-password=${{ inputs.github-token }} --version-number=${{inputs.github-run-number}} --docker-registry=ghcr.io
+      run: ./ci.sh go ${{inputs.build-params}} --sonarqube=${{inputs.sonar-active}} --app-name=${{ inputs.app-name }} --docker-username=${{ github.actor }}  --docker-password=${{ inputs.github-token }} --version-number=${{inputs.github-run-number}} --docker-registry=ghcr.io
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
