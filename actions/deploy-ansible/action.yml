@@ -72,32 +72,32 @@ runs:
     - name: Set Up VPN Config
       run: |
           # Vérifier que le secret VPN_CONFIG existe et n'est pas vide
-          if [[ -z "${{ secrets.VPN_CONFIG }}" ]]; then
+          if [[ -z "${{ inputs.vpn-conf }}" ]]; then
             echo "Erreur: Le secret VPN_CONFIG est vide ou n'existe pas"
             exit 1
           fi
 
           # Écrire la configuration VPN directement (non encodée)
-          echo "${{ secrets.VPN_CONFIG }}" > vpn.conf
+          echo "${{ inputs.vpn-conf }}" > vpn.conf
 
           # Setup certificate-based authentication for VPN
-          if [[ -n "${{ secrets.VPN_CLIENT_CERT }}" && -n "${{ secrets.VPN_CLIENT_KEY }}" ]]; then
-            echo "${{ secrets.VPN_CLIENT_CERT }}" > github.crt
-            echo "${{ secrets.VPN_CLIENT_KEY }}" > github.key
+          if [[ -n "${{ inputs.vpn-client-cert }}" && -n "${{ inputs.vpn-client-key }}" ]]; then
+            echo "${{ inputs.vpn-client-cert }}" > github.crt
+            echo "${{ inputs.vpn-client-key }}" > github.key
             echo "cert github.crt" >> vpn.conf
             echo "key github.key" >> vpn.conf
             chmod 600 github.key  # Secure the private key file
           fi
 
           # Add CA certificate if available
-          if [[ -n "${{ secrets.VPN_CA_CERT }}" ]]; then
-            echo "${{ secrets.VPN_CA_CERT }}" > ca.crt
+          if [[ -n "${{ inputs.vpn-ca-cert }}" ]]; then
+            echo "${{ inputs.vpn-ca-cert }}" > ca.crt
             echo "ca ca.crt" >> vpn.conf
           fi
 
           # Add TLS auth key if available
-          if [[ -n "${{ secrets.VPN_TA_KEY }}" ]]; then
-            echo "${{ secrets.VPN_TA_KEY }}" > ta.key
+          if [[ -n "${{ inputs.vpn-ta-key }}" ]]; then
+            echo "${{ inputs.vpn-ta-key }}" > ta.key
             echo "tls-auth ta.key 1" >> vpn.conf
             chmod 600 ta.key  # Secure the TLS auth key file
           fi
