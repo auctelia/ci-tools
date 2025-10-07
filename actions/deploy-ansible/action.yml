@@ -66,37 +66,38 @@ runs:
     - name: Install Dependencies
       run: |
           sudo apt-get update
-          sudo apt-get install -y openvpn ansible openssh-client
+          sudo apt-get install -y openvpn ansible openssh-client traceroute
       shell: bash
-
+    
     - name: Set Up VPN Config
       run: |
-          if [[ -z "${{ inputs.vpn-conf }}" ]]; then
-            echo "Erreur: L'input vpn-conf est vide ou n'existe pas"
+          # Vérifier que le secret VPN_CONFIG existe et n'est pas vide
+          if [[ -z "${{ secrets.VPN_CONFIG }}" ]]; then
+            echo "Erreur: Le secret VPN_CONFIG est vide ou n'existe pas"
             exit 1
           fi
 
           # Écrire la configuration VPN directement (non encodée)
-          echo "${{ inputs.vpn-conf }}" > vpn.conf
+          echo "${{ secrets.VPN_CONFIG }}" > vpn.conf
 
           # Setup certificate-based authentication for VPN
-          if [[ -n "${{ inputs.vpn-client-cert }}" && -n "${{ inputs.vpn-client-key }}" ]]; then
-            echo "${{ inputs.vpn-client-cert }}" > github.crt
-            echo "${{ inputs.vpn-client-key }}" > github.key
+          if [[ -n "${{ secrets.VPN_CLIENT_CERT }}" && -n "${{ secrets.VPN_CLIENT_KEY }}" ]]; then
+            echo "${{ secrets.VPN_CLIENT_CERT }}" > github.crt
+            echo "${{ secrets.VPN_CLIENT_KEY }}" > github.key
             echo "cert github.crt" >> vpn.conf
             echo "key github.key" >> vpn.conf
             chmod 600 github.key  # Secure the private key file
           fi
 
           # Add CA certificate if available
-          if [[ -n "${{ inputs.vpn-ca-cert }}" ]]; then
-            echo "${{ inputs.vpn-ca-cert }}" > ca.crt
+          if [[ -n "${{ secrets.VPN_CA_CERT }}" ]]; then
+            echo "${{ secrets.VPN_CA_CERT }}" > ca.crt
             echo "ca ca.crt" >> vpn.conf
           fi
 
           # Add TLS auth key if available
-          if [[ -n "${{ inputs.vpn-ta-key }}" ]]; then
-            echo "${{ inputs.vpn-ta-key }}" > ta.key
+          if [[ -n "${{ secrets.VPN_TA_KEY }}" ]]; then
+            echo "${{ secrets.VPN_TA_KEY }}" > ta.key
             echo "tls-auth ta.key 1" >> vpn.conf
             chmod 600 ta.key  # Secure the TLS auth key file
           fi
@@ -112,34 +113,51 @@ runs:
 
     - name: Connect to VPN
       run: |
-          sudo openvpn --config vpn.conf --daemon
-          sleep 10  # Wait for VPN to establish
-          ip a      # Debug: see VPN interfaces
+                  sudo openvpn --config vpn.conf --daemon
+                  echo "=== Vérification de la connexion VPN ==="
+                  sleep 10
+                  echo "=== Debug: see VPN interfaces ==="
+                  ip a 
+                  echo "=== Vérification des routes ==="
+                  ip route
+                  echo "=== Traceroute ==="
+                  traceroute ansible.cluster.auctelia.com || true
+                  echo "=== Test DNS ==="
+                  nslookup ansible.cluster.auctelia.com || true
+                  echo "=== Test ping ==="
+                  ping -c 3 ansible.cluster.auctelia.com || true
+      shell: bash
+
+    - name: Fix route to cluster
+      run: |
+          sudo ip route del 10.1.0.0/20 dev eth0 || true
+          sudo ip route add 10.0.0.0/16 dev tun0
       shell: bash
 
     - name: Call Ansible Deployment API
       run: |
-          curl -X POST "http://ansible.cluster.auctelia.com/api/v2/job_templates/${{ inputs.awx-services-id }}/launch/" \
-            -H "Content-Type: application/json" \
-            -u "${{ inputs.awx-username }}:${{ inputs.awx-password }}" \
-            -d '{
-                  "extra_vars":{
-                    "deploy_env": "${{ inputs.deploy-env }}",
-                    "deploy_image_tag": "v${{ github.run_number }}",
-                    "docker_image": "${{ inputs.docker-image }}"
-                  }
-              }'
+                curl -X POST "http://ansible.cluster.auctelia.com/api/v2/job_templates/${{ inputs.awx-services-id }}/launch/" \
+                  -H "Content-Type: application/json" \
+                  -u "${{ inputs.awx-username }}:${{ inputs.awx-password }}" \
+                  -d '{
+                        "extra_vars":{
+                          "deploy_env": "${{ inputs.deploy-env }}",
+                          "deploy_image_tag": "v${{ github.run_number }}",
+                          "docker_image": "${{ inputs.docker-image }}"
+                        }
+                    }'
       shell: bash
-
-    - name: Stop VPN
-      run: sudo killall openvpn || true
+      
+    - name: Disconnect VPN
+      if: always()
+      run: |
+            sudo pkill openvpn || true
+            echo "VPN disconnected"
       shell: bash
-
+          
     - name: Send Slack Notification for Deployment
-      id: send-slack-notification
-      uses: act10ns/slack@v1.6.0
-      with:
-          webhook-url: ${{ inputs.tars-slack-webhook-url }}
-          channel: "#tars-notif-deployment"
-          status: ${{ job.status }}
-          config: config/slack.yml
+      run: |
+          sudo openvpn --config vpn.conf --daemon
+          sleep 10  # Wait for VPN to establish
+          ip a      # Debug: see VPN interfaces
+      shell: bash
