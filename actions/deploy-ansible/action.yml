@@ -54,6 +54,17 @@ inputs:
     description: "Deployment environment (e.g., staging,test, production)"
     default: "staging"
     required: true
+  health-check-url:
+    description: "URL to check deployment health (optional)"
+    required: false
+  health-check-timeout:
+    description: "Timeout in seconds for health check"
+    default: "300"
+    required: false
+  rollback-enabled:
+    description: "Enable automatic rollback on deployment failure"
+    default: "true"
+    required: false
 
 runs:
   using: "composite"
@@ -134,9 +145,22 @@ runs:
           sudo ip route add 10.0.0.0/16 dev tun0
       shell: bash
 
-    - name: Call Ansible Deployment API
+    - name: Get Current Deployment State
+      id: get-current-state
       run: |
-                curl -X POST "http://ansible.cluster.auctelia.com/api/v2/job_templates/${{ inputs.awx-services-id }}/launch/" \
+          # Get current running version before deployment
+          CURRENT_VERSION=$(curl -s -u "${{ inputs.awx-username }}:${{ inputs.awx-password }}" \
+            "http://ansible.cluster.auctelia.com/api/v2/job_templates/${{ inputs.awx-services-id }}/" \
+            | jq -r '.extra_vars.deploy_image_tag // "unknown"' || echo "unknown")
+          
+          echo "current-version=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
+          echo "Previous deployment version: ${CURRENT_VERSION}"
+      shell: bash
+
+    - name: Call Ansible Deployment API
+      id: deploy
+      run: |
+                RESPONSE=$(curl -s -X POST "http://ansible.cluster.auctelia.com/api/v2/job_templates/${{ inputs.awx-services-id }}/launch/" \
                   -H "Content-Type: application/json" \
                   -u "${{ inputs.awx-username }}:${{ inputs.awx-password }}" \
                   -d '{
@@ -145,7 +169,167 @@ runs:
                           "deploy_image_tag": "v${{ github.run_number }}",
                           "docker_image": "${{ inputs.docker-image }}"
                         }
-                    }'
+                    }')
+                
+                JOB_ID=$(echo "$RESPONSE" | jq -r '.id // empty')
+                if [[ -z "$JOB_ID" ]]; then
+                  echo "Failed to get job ID from deployment response"
+                  echo "Response: $RESPONSE"
+                  exit 1
+                fi
+                
+                echo "job-id=${JOB_ID}" >> $GITHUB_OUTPUT
+                echo "Deployment job started with ID: ${JOB_ID}"
+      shell: bash
+
+    - name: Wait for Deployment to Complete
+      id: wait-deploy
+      run: |
+          JOB_ID="${{ steps.deploy.outputs.job-id }}"
+          TIMEOUT=600  # 10 minutes timeout
+          ELAPSED=0
+          INTERVAL=10
+          
+          echo "Waiting for deployment job ${JOB_ID} to complete..."
+          
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            STATUS=$(curl -s -u "${{ inputs.awx-username }}:${{ inputs.awx-password }}" \
+              "http://ansible.cluster.auctelia.com/api/v2/jobs/${JOB_ID}/" \
+              | jq -r '.status // "unknown"')
+            
+            echo "Job status: ${STATUS} (elapsed: ${ELAPSED}s)"
+            
+            case "$STATUS" in
+              "successful")
+                echo "deployment-status=success" >> $GITHUB_OUTPUT
+                echo "Deployment completed successfully!"
+                exit 0
+                ;;
+              "failed"|"error"|"canceled")
+                echo "deployment-status=failed" >> $GITHUB_OUTPUT
+                echo "Deployment failed with status: ${STATUS}"
+                exit 1
+                ;;
+              "running"|"pending"|"waiting")
+                sleep $INTERVAL
+                ELAPSED=$((ELAPSED + INTERVAL))
+                ;;
+              *)
+                echo "Unknown status: ${STATUS}"
+                sleep $INTERVAL
+                ELAPSED=$((ELAPSED + INTERVAL))
+                ;;
+            esac
+          done
+          
+          echo "deployment-status=timeout" >> $GITHUB_OUTPUT
+          echo "Deployment timed out after ${TIMEOUT} seconds"
+          exit 1
+      shell: bash
+
+    - name: Health Check (if URL provided)
+      id: health-check
+      if: inputs.health-check-url != ''
+      run: |
+          HEALTH_URL="${{ inputs.health-check-url }}"
+          TIMEOUT="${{ inputs.health-check-timeout }}"
+          ELAPSED=0
+          INTERVAL=5
+          
+          echo "Starting health check on: ${HEALTH_URL}"
+          
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || echo "000")
+            
+            if [[ "$HTTP_CODE" =~ ^2[0-9][0-9]$ ]]; then
+              echo "health-status=healthy" >> $GITHUB_OUTPUT
+              echo "Health check passed! HTTP $HTTP_CODE"
+              exit 0
+            else
+              echo "Health check failed with HTTP $HTTP_CODE (elapsed: ${ELAPSED}s)"
+              sleep $INTERVAL
+              ELAPSED=$((ELAPSED + INTERVAL))
+            fi
+          done
+          
+          echo "health-status=unhealthy" >> $GITHUB_OUTPUT
+          echo "Health check failed after ${TIMEOUT} seconds"
+          exit 1
+      shell: bash
+
+    - name: Rollback on Failure
+      id: rollback
+      if: failure() && inputs.rollback-enabled == 'true' && steps.get-current-state.outputs.current-version != 'unknown'
+      run: |
+          echo "Deployment or health check failed. Initiating rollback..."
+          PREVIOUS_VERSION="${{ steps.get-current-state.outputs.current-version }}"
+          
+          if [[ "$PREVIOUS_VERSION" == "unknown" || "$PREVIOUS_VERSION" == "null" ]]; then
+            echo "Cannot rollback: previous version is unknown"
+            echo "rollback-status=skipped" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "Rolling back to version: ${PREVIOUS_VERSION}"
+          
+          ROLLBACK_RESPONSE=$(curl -s -X POST "http://ansible.cluster.auctelia.com/api/v2/job_templates/${{ inputs.awx-services-id }}/launch/" \
+            -H "Content-Type: application/json" \
+            -u "${{ inputs.awx-username }}:${{ inputs.awx-password }}" \
+            -d "{
+                  \"extra_vars\":{
+                    \"deploy_env\": \"${{ inputs.deploy-env }}\",
+                    \"deploy_image_tag\": \"${PREVIOUS_VERSION}\",
+                    \"docker_image\": \"${{ inputs.docker-image }}\"
+                  }
+                }")
+          
+          ROLLBACK_JOB_ID=$(echo "$ROLLBACK_RESPONSE" | jq -r '.id // empty')
+          if [[ -z "$ROLLBACK_JOB_ID" ]]; then
+            echo "Failed to start rollback job"
+            echo "rollback-status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          echo "Rollback job started with ID: ${ROLLBACK_JOB_ID}"
+          
+          # Wait for rollback to complete
+          TIMEOUT=600
+          ELAPSED=0
+          INTERVAL=10
+          
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            ROLLBACK_STATUS=$(curl -s -u "${{ inputs.awx-username }}:${{ inputs.awx-password }}" \
+              "http://ansible.cluster.auctelia.com/api/v2/jobs/${ROLLBACK_JOB_ID}/" \
+              | jq -r '.status // "unknown"')
+            
+            echo "Rollback status: ${ROLLBACK_STATUS} (elapsed: ${ELAPSED}s)"
+            
+            case "$ROLLBACK_STATUS" in
+              "successful")
+                echo "rollback-status=success" >> $GITHUB_OUTPUT
+                echo "Rollback completed successfully!"
+                exit 0
+                ;;
+              "failed"|"error"|"canceled")
+                echo "rollback-status=failed" >> $GITHUB_OUTPUT
+                echo "Rollback failed with status: ${ROLLBACK_STATUS}"
+                exit 1
+                ;;
+              "running"|"pending"|"waiting")
+                sleep $INTERVAL
+                ELAPSED=$((ELAPSED + INTERVAL))
+                ;;
+              *)
+                echo "Unknown rollback status: ${ROLLBACK_STATUS}"
+                sleep $INTERVAL
+                ELAPSED=$((ELAPSED + INTERVAL))
+                ;;
+            esac
+          done
+          
+          echo "rollback-status=timeout" >> $GITHUB_OUTPUT
+          echo "Rollback timed out after ${TIMEOUT} seconds"
+          exit 1
       shell: bash
       
     - name: Disconnect VPN
@@ -156,8 +340,82 @@ runs:
       shell: bash
           
     - name: Send Slack Notification for Deployment
+      if: always()
       run: |
-          sudo openvpn --config vpn.conf --daemon
-          sleep 10  # Wait for VPN to establish
-          ip a      # Debug: see VPN interfaces
+          # Determine deployment status
+          DEPLOY_STATUS="${{ steps.wait-deploy.outputs.deployment-status }}"
+          HEALTH_STATUS="${{ steps.health-check.outputs.health-status }}"
+          ROLLBACK_STATUS="${{ steps.rollback.outputs.rollback-status }}"
+          
+          # Determine overall status and message
+          if [[ "$DEPLOY_STATUS" == "success" && ("$HEALTH_STATUS" == "healthy" || "$HEALTH_STATUS" == "") ]]; then
+            STATUS="✅ SUCCESS"
+            COLOR="good"
+            MESSAGE="Deployment completed successfully"
+          elif [[ "$ROLLBACK_STATUS" == "success" ]]; then
+            STATUS="⚠️ ROLLED BACK"
+            COLOR="warning"
+            MESSAGE="Deployment failed and was rolled back successfully"
+          elif [[ "$ROLLBACK_STATUS" == "failed" ]]; then
+            STATUS="❌ CRITICAL"
+            COLOR="danger"
+            MESSAGE="Deployment failed and rollback also failed"
+          else
+            STATUS="❌ FAILED"
+            COLOR="danger"
+            MESSAGE="Deployment failed"
+          fi
+          
+          # Prepare Slack payload
+          PAYLOAD=$(cat << EOF
+          {
+            "attachments": [
+              {
+                "color": "${COLOR}",
+                "fields": [
+                  {
+                    "title": "Deployment Status",
+                    "value": "${STATUS}",
+                    "short": true
+                  },
+                  {
+                    "title": "Application",
+                    "value": "${{ inputs.app-name }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Environment",
+                    "value": "${{ inputs.deploy-env }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Version",
+                    "value": "v${{ github.run_number }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Repository",
+                    "value": "${{ github.repository }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Branch",
+                    "value": "${{ github.ref_name }}",
+                    "short": true
+                  }
+                ],
+                "footer": "GitHub Actions",
+                "footer_icon": "https://github.com/favicon.ico",
+                "ts": $(date +%s)
+              }
+            ],
+            "text": "${MESSAGE}"
+          }
+          EOF
+          )
+          
+          # Send notification
+          curl -X POST -H 'Content-type: application/json' \
+            --data "${PAYLOAD}" \
+            "${{ inputs.tars-slack-webhook-url }}"
       shell: bash
