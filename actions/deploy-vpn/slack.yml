@@ -1,0 +1,47 @@
+username: GitHub-CI
+icon_url: https://github.githubassets.com/favicons/favicon.png
+
+pretext: "{{icon jobStatus}} <{{workflowUrl}}|{{workflow}}> • <{{repositoryUrl}}|{{repositoryName}}> • <{{workflowRunUrl}}|#v{{runNumber}}>"
+title: "Job `{{jobName}}` completed • *{{jobStatus}}*"
+
+text: |
+  {{#if description}}📝 *Changes:* <{{diffUrl}}|`{{diffRef}}`> - {{description}}{{/if}}
+
+  {{#if payload.commits}}
+  📦 *Commits:*
+  {{#each payload.commits}}
+  • <{{this.url}}|`{{truncate this.id 8}}`> {{this.message}}
+  {{/each}}
+  {{/if}}
+
+  {{#if steps}}
+  ⚙️ *Execution Steps:*
+  {{#each steps}}
+  {{icon this.outcome}} `{{this.id}}`{{#if this.outputs.stdout}} - {{truncate this.outputs.stdout 100}}{{/if}}
+  {{/each}}
+  {{/if}}
+fallback: |-
+  {{icon jobStatus}} [{{repositoryName}}] {{workflow}} #v{{runNumber}} - {{jobName}} is {{jobStatus}}
+fields:
+  - title: "⚡ Event"
+    value: "{{eventName}}"
+    short: true
+  - title: "🌿 Branch"
+    value: "<{{refUrl}}|`{{ref}}`> ({{refType}})"
+    short: true
+  - title: "👤 Triggered by"
+    value: "{{actor}}"
+    short: true
+footer: "GitHub Actions"
+colors:
+  success: "#28a745"
+  failure: "#dc3545"
+  cancelled: "#6c757d"
+  default: "#007bff"
+
+icons:
+  success: ":white_check_mark:"
+  failure: ":x:"
+  cancelled: ":warning:"
+  skipped: ":fast_forward:"
+  default: ":gear:"
