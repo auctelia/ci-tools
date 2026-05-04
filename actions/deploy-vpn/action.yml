@@ -1,0 +1,200 @@
+name: "Deploy via VPN"
+description: "Connects to VPN and triggers Ansible deployment"
+
+inputs:
+  deploy_env:
+    description: "Deployment environment (integration, uat, prod)"
+    required: true
+  deploy_image_tag:
+    description: "Docker image tag to deploy"
+    required: true
+  docker_image:
+    description: "Docker image name"
+    required: true
+  vpn_config:
+    description: "VPN configuration"
+    required: true
+  vpn_client_cert:
+    description: "VPN client certificate"
+    required: false
+  vpn_client_key:
+    description: "VPN client key"
+    required: false
+  vpn_ca_cert:
+    description: "VPN CA certificate"
+    required: false
+  vpn_ta_key:
+    description: "VPN TLS auth key"
+    required: false
+  awx_username:
+    description: "AWX username"
+    required: true
+  awx_password:
+    description: "AWX password"
+    required: true
+  slack_webhook_url:
+    description: "Slack webhook URL"
+    required: true
+  job_status:
+    description: "Job status for Slack notification"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install VPN Dependencies
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y openvpn openssh-client
+
+    - name: Set Up VPN Config
+      shell: bash
+      run: |
+        if [[ -z "${{ inputs.vpn_config }}" ]]; then
+          echo "Error: VPN_CONFIG is empty or does not exist"
+          exit 1
+        fi
+
+        echo "${{ inputs.vpn_config }}" > vpn.conf
+        chmod 600 vpn.conf
+
+        if [[ -n "${{ inputs.vpn_client_cert }}" && -n "${{ inputs.vpn_client_key }}" ]]; then
+          echo "${{ inputs.vpn_client_cert }}" > github.crt
+          echo "${{ inputs.vpn_client_key }}" > github.key
+          echo "cert github.crt" >> vpn.conf
+          echo "key github.key" >> vpn.conf
+          chmod 600 github.crt
+          chmod 600 github.key
+        fi
+
+        if [[ -n "${{ inputs.vpn_ca_cert }}" ]]; then
+          echo "${{ inputs.vpn_ca_cert }}" > ca.crt
+          echo "ca ca.crt" >> vpn.conf
+          chmod 600 ca.crt
+        fi
+
+        if [[ -n "${{ inputs.vpn_ta_key }}" ]]; then
+          echo "${{ inputs.vpn_ta_key }}" > ta.key
+          echo "tls-auth ta.key 1" >> vpn.conf
+          chmod 600 ta.key
+        fi
+
+        echo "VPN configuration set up successfully"
+
+    - name: Connect to VPN
+      shell: bash
+      run: |
+        sudo openvpn --config vpn.conf --daemon
+
+        echo "Waiting for VPN connection to establish..."
+        MAX_WAIT=30
+        WAITED=0
+
+        while [[ $WAITED -lt $MAX_WAIT ]]; do
+          if ip a show tun0 > /dev/null 2>&1; then
+            echo "VPN interface detected after ${WAITED}s"
+            sleep 5
+            break
+          fi
+
+          sleep 2
+          WAITED=$((WAITED + 2))
+        done
+
+        if ! ip a show tun0 > /dev/null 2>&1; then
+          echo "Error: VPN connection did not establish within ${MAX_WAIT}s"
+          exit 1
+        fi
+
+        echo "VPN connected"
+
+    - name: Verify VPN Connection
+      shell: bash
+      run: |
+        echo "=== Verifying VPN connection ==="
+
+        if ! ip a show tun0 > /dev/null 2>&1; then
+          echo "Error: VPN tunnel interface (tun0) not found"
+          exit 1
+        fi
+
+        echo "VPN interface tun0 is up"
+        echo "=== Testing connectivity to Ansible server ==="
+
+        if ! ping -c 3 -W 5 ansible.cluster.auctelia.com > /dev/null 2>&1; then
+          echo "Warning: Cannot ping Ansible server, but continuing..."
+        else
+          echo "Ansible server is reachable"
+        fi
+
+    - name: Fix route to cluster
+      shell: bash
+      run: |
+        sudo ip route del 10.1.0.0/20 dev eth0 || true
+        sudo ip route add 10.0.0.0/16 dev tun0 || true
+
+    - name: Call Ansible Deployment API
+      shell: bash
+      run: |
+        echo "Triggering deployment to ${{ inputs.deploy_env }}..."
+
+        sleep 5
+        set +e
+
+        HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
+          --max-time 30 \
+          --connect-timeout 10 \
+          -X POST \
+          "http://ansible.cluster.auctelia.com/api/v2/job_templates/51/launch/" \
+          -H "Content-Type: application/json" \
+          -u "${{ inputs.awx_username }}:${{ inputs.awx_password }}" \
+          -d '{
+                "extra_vars":{
+                  "deploy_env": "${{ inputs.deploy_env }}",
+                  "deploy_image_tag": "${{ inputs.deploy_image_tag }}",
+                  "docker_image": "${{ inputs.docker_image }}"
+                }
+            }')
+
+        CURL_EXIT_CODE=$?
+        set -e
+
+        if [[ "$CURL_EXIT_CODE" =~ ^(7|28|55|56)$ ]]; then
+          echo "Warning: Curl exit code $CURL_EXIT_CODE - request likely sent but response not fully received"
+          echo "Deployment has probably been triggered. Check Ansible AWX for job status."
+          exit 0
+        fi
+
+        if [[ $CURL_EXIT_CODE -ne 0 ]]; then
+          echo "Error: Curl failed with exit code $CURL_EXIT_CODE"
+          exit 1
+        fi
+
+        HTTP_BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+        HTTP_STATUS=$(echo "$HTTP_RESPONSE" | tail -n 1)
+
+        echo "API Response: $HTTP_BODY"
+        echo "HTTP Status: $HTTP_STATUS"
+
+        if [[ "$HTTP_STATUS" -lt 200 || "$HTTP_STATUS" -ge 300 ]]; then
+          echo "Error: Ansible API call failed with status $HTTP_STATUS"
+          exit 1
+        fi
+
+        echo "Deployment triggered successfully"
+
+    - name: Disconnect VPN
+      if: always()
+      shell: bash
+      run: |
+        sudo pkill openvpn || true
+        echo "VPN disconnected"
+
+    - name: Send Slack Notification
+      uses: act10ns/slack@v1.6.0
+      with:
+        webhook-url: ${{ inputs.slack_webhook_url }}
+        channel: "#tars-notif-deployment"
+        status: ${{ inputs.job_status }}
+        config: ${{ github.action_path }}/slack.yml
