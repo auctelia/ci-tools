@@ -65,6 +65,10 @@ inputs:
     description: "Enable automatic rollback on deployment failure"
     default: "true"
     required: false
+  time-bypass:
+    description: "Bypass time-based deployment restrictions in AWX"
+    default: "false"
+    required: false
 
 runs:
   using: "composite"
@@ -167,7 +171,8 @@ runs:
                         "extra_vars":{
                           "deploy_env": "${{ inputs.deploy-env }}",
                           "deploy_image_tag": "v${{ github.run_number }}",
-                          "docker_image": "${{ inputs.docker-image }}"
+                          "docker_image": "${{ inputs.docker-image }}",
+                          "time_bypass": "${{ inputs.time-bypass }}"
                         }
                     }')
                 
@@ -279,7 +284,8 @@ runs:
                   \"extra_vars\":{
                     \"deploy_env\": \"${{ inputs.deploy-env }}\",
                     \"deploy_image_tag\": \"${PREVIOUS_VERSION}\",
-                    \"docker_image\": \"${{ inputs.docker-image }}\"
+                    \"docker_image\": \"${{ inputs.docker-image }}\",
+                    \"time_bypass\": \"${{ inputs.time-bypass }}\"
                   }
                 }")
           
