@@ -1,0 +1,188 @@
+name: 'Migrate Database'
+description: 'Run database migrations via VPN after deployment (npm run migrate)'
+
+inputs:
+  app-name:
+    description: 'Name of the application'
+    required: true
+  github-token:
+    description: 'GitHub token for installing private packages'
+    required: true
+  vpn-conf:
+    description: 'VPN configuration'
+    required: true
+  vpn-client-cert:
+    description: 'VPN client certificate'
+    required: true
+  vpn-client-key:
+    description: 'VPN client key'
+    required: true
+  vpn-ca-cert:
+    description: 'VPN CA certificate'
+    required: true
+  vpn-ta-key:
+    description: 'VPN TLS auth key'
+    required: true
+  pg-host:
+    description: 'PostgreSQL host'
+    required: true
+  pg-user:
+    description: 'PostgreSQL user'
+    required: true
+  pg-password:
+    description: 'PostgreSQL password'
+    required: true
+  pg-db:
+    description: 'PostgreSQL database name'
+    required: true
+  deploy-env:
+    description: 'Target environment (integration, uat, prod)'
+    required: true
+  tars-slack-webhook-url:
+    description: 'Slack webhook URL for notifications'
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout repository
+      uses: actions/checkout@v6
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v6
+      with:
+        node-version: 20
+
+    - name: Install dependencies
+      run: npm install
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+
+    - name: Install VPN dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y openvpn traceroute
+      shell: bash
+
+    - name: Set Up VPN Config
+      run: |
+        if [[ -z "${{ inputs.vpn-conf }}" ]]; then
+          echo "Error: vpn-conf input is empty"
+          exit 1
+        fi
+
+        echo "${{ inputs.vpn-conf }}" > vpn.conf
+
+        if [[ -n "${{ inputs.vpn-client-cert }}" && -n "${{ inputs.vpn-client-key }}" ]]; then
+          echo "${{ inputs.vpn-client-cert }}" > github.crt
+          echo "${{ inputs.vpn-client-key }}" > github.key
+          echo "cert github.crt" >> vpn.conf
+          echo "key github.key" >> vpn.conf
+          chmod 600 github.key
+        fi
+
+        if [[ -n "${{ inputs.vpn-ca-cert }}" ]]; then
+          echo "${{ inputs.vpn-ca-cert }}" > ca.crt
+          echo "ca ca.crt" >> vpn.conf
+        fi
+
+        if [[ -n "${{ inputs.vpn-ta-key }}" ]]; then
+          echo "${{ inputs.vpn-ta-key }}" > ta.key
+          echo "tls-auth ta.key 1" >> vpn.conf
+          chmod 600 ta.key
+        fi
+
+        echo "VPN configuration written"
+      shell: bash
+
+    - name: Connect to VPN
+      run: |
+        sudo openvpn --config vpn.conf --daemon
+        sleep 10
+        echo "=== VPN interfaces ==="
+        ip a
+        echo "=== Routes ==="
+        ip route
+        echo "=== Traceroute ==="
+        traceroute ansible.cluster.auctelia.com || true
+      shell: bash
+
+    - name: Fix route to cluster
+      run: |
+        sudo ip route del 10.1.0.0/20 dev eth0 || true
+        sudo ip route add 10.0.0.0/16 dev tun0
+      shell: bash
+
+    - name: Run database migration
+      id: migration
+      run: npm run migrate
+      shell: bash
+      continue-on-error: true
+      env:
+        PG_HOST: ${{ inputs.pg-host }}
+        PG_USER: ${{ inputs.pg-user }}
+        PG_PASSWORD: ${{ inputs.pg-password }}
+        PG_DB: ${{ inputs.pg-db }}
+
+    - name: Rollback migration on failure
+      if: steps.migration.outcome == 'failure'
+      run: npm run migrate:down
+      shell: bash
+      env:
+        PG_HOST: ${{ inputs.pg-host }}
+        PG_USER: ${{ inputs.pg-user }}
+        PG_PASSWORD: ${{ inputs.pg-password }}
+        PG_DB: ${{ inputs.pg-db }}
+
+    - name: Disconnect VPN
+      if: always()
+      run: |
+        sudo pkill openvpn || true
+        echo "VPN disconnected"
+      shell: bash
+
+    - name: Send Slack notification
+      if: always()
+      run: |
+        MIGRATION_OUTCOME="${{ steps.migration.outcome }}"
+
+        if [[ "$MIGRATION_OUTCOME" == "success" ]]; then
+          STATUS="SUCCESS"
+          COLOR="good"
+          MESSAGE="Migration completed successfully"
+        else
+          STATUS="FAILED & ROLLED BACK"
+          COLOR="danger"
+          MESSAGE="Migration failed — migrate:down was executed"
+        fi
+
+        PAYLOAD=$(cat << EOF
+        {
+          "attachments": [
+            {
+              "color": "${COLOR}",
+              "fields": [
+                {"title": "Migration Status", "value": "${STATUS}", "short": true},
+                {"title": "Application", "value": "${{ inputs.app-name }}", "short": true},
+                {"title": "Environment", "value": "${{ inputs.deploy-env }}", "short": true},
+                {"title": "Run", "value": "#${{ github.run_number }}", "short": true},
+                {"title": "Repository", "value": "${{ github.repository }}", "short": false},
+                {"title": "Branch", "value": "${{ github.ref_name }}", "short": true}
+              ],
+              "footer": "${MESSAGE}"
+            }
+          ]
+        }
+        EOF
+        )
+
+        curl -s -X POST "${{ inputs.tars-slack-webhook-url }}" \
+          -H 'Content-type: application/json' \
+          --data "${PAYLOAD}"
+      shell: bash
+
+    - name: Fail if migration failed
+      if: steps.migration.outcome == 'failure'
+      run: exit 1
+      shell: bash
