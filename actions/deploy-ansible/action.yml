@@ -129,10 +129,27 @@ runs:
     - name: Connect to VPN
       run: |
                   sudo openvpn --config vpn.conf --daemon
-                  echo "=== Vérification de la connexion VPN ==="
-                  sleep 10
-                  echo "=== Debug: see VPN interfaces ==="
-                  ip a 
+
+                  echo "=== Attente de l'établissement du tunnel VPN ==="
+                  MAX_WAIT=30
+                  WAITED=0
+                  while [[ $WAITED -lt $MAX_WAIT ]]; do
+                    if ip a show tun0 > /dev/null 2>&1; then
+                      echo "Interface VPN tun0 détectée après ${WAITED}s"
+                      sleep 5  # stabilisation
+                      break
+                    fi
+                    sleep 2
+                    WAITED=$((WAITED + 2))
+                  done
+
+                  if ! ip a show tun0 > /dev/null 2>&1; then
+                    echo "Erreur: le tunnel VPN (tun0) ne s'est pas établi en ${MAX_WAIT}s"
+                    exit 1
+                  fi
+
+                  echo "=== Debug: interfaces VPN ==="
+                  ip a
                   echo "=== Vérification des routes ==="
                   ip route
                   echo "=== Traceroute ==="
@@ -146,14 +163,14 @@ runs:
     - name: Fix route to cluster
       run: |
           sudo ip route del 10.1.0.0/20 dev eth0 || true
-          sudo ip route add 10.0.0.0/16 dev tun0
+          sudo ip route add 10.0.0.0/16 dev tun0 || true
       shell: bash
 
     - name: Get Current Deployment State
       id: get-current-state
       run: |
           # Get current running version before deployment
-          CURRENT_VERSION=$(curl -s -u "${{ inputs.awx-username }}:${{ inputs.awx-password }}" \
+          CURRENT_VERSION=$(curl -s --max-time 30 --connect-timeout 10 -u "${{ inputs.awx-username }}:${{ inputs.awx-password }}" \
             "http://ansible.cluster.auctelia.com/api/v2/job_templates/${{ inputs.awx-services-id }}/" \
             | jq -r '.extra_vars.deploy_image_tag // "unknown"' || echo "unknown")
           
@@ -164,7 +181,13 @@ runs:
     - name: Call Ansible Deployment API
       id: deploy
       run: |
-                RESPONSE=$(curl -s -X POST "http://ansible.cluster.auctelia.com/api/v2/job_templates/${{ inputs.awx-services-id }}/launch/" \
+                # Le tunnel VPN perd fréquemment le paquet de réponse d'un POST
+                # alors qu'AWX a bien reçu et lancé le job. On ne fait donc pas
+                # échouer l'étape sur une erreur réseau de réception/envoi : on
+                # retombe sur la récupération du dernier job du template.
+                set +e
+                RESPONSE=$(curl -s --max-time 30 --connect-timeout 10 \
+                  -X POST "http://ansible.cluster.auctelia.com/api/v2/job_templates/${{ inputs.awx-services-id }}/launch/" \
                   -H "Content-Type: application/json" \
                   -u "${{ inputs.awx-username }}:${{ inputs.awx-password }}" \
                   -d '{
@@ -175,14 +198,28 @@ runs:
                           "time_bypass": "${{ inputs.time-bypass }}"
                         }
                     }')
-                
-                JOB_ID=$(echo "$RESPONSE" | jq -r '.id // empty')
+                CURL_EXIT_CODE=$?
+                set -e
+
+                JOB_ID=$(echo "$RESPONSE" | jq -r '.id // empty' 2>/dev/null || echo "")
+
+                # Codes curl réseau: 7 connect, 28 timeout, 55 send, 56 recv.
+                # La requête a probablement abouti côté AWX malgré l'erreur.
                 if [[ -z "$JOB_ID" ]]; then
-                  echo "Failed to get job ID from deployment response"
-                  echo "Response: $RESPONSE"
+                  echo "Réponse de lancement vide ou incomplète (curl exit ${CURL_EXIT_CODE})."
+                  echo "Réponse: $RESPONSE"
+                  echo "Récupération du dernier job du template ${{ inputs.awx-services-id }}..."
+                  JOB_ID=$(curl -s --max-time 30 --connect-timeout 10 \
+                    -u "${{ inputs.awx-username }}:${{ inputs.awx-password }}" \
+                    "http://ansible.cluster.auctelia.com/api/v2/job_templates/${{ inputs.awx-services-id }}/jobs/?order_by=-created&page_size=1" \
+                    | jq -r '.results[0].id // empty' 2>/dev/null || echo "")
+                fi
+
+                if [[ -z "$JOB_ID" ]]; then
+                  echo "Échec: impossible de récupérer un job ID, même en fallback."
                   exit 1
                 fi
-                
+
                 echo "job-id=${JOB_ID}" >> $GITHUB_OUTPUT
                 echo "Deployment job started with ID: ${JOB_ID}"
       shell: bash
@@ -198,10 +235,15 @@ runs:
           echo "Waiting for deployment job ${JOB_ID} to complete..."
           
           while [ $ELAPSED -lt $TIMEOUT ]; do
-            STATUS=$(curl -s -u "${{ inputs.awx-username }}:${{ inputs.awx-password }}" \
-              "http://ansible.cluster.auctelia.com/api/v2/jobs/${JOB_ID}/" \
-              | jq -r '.status // "unknown"')
-            
+            # Le VPN est intermittent: un poll qui échoue (timeout/drop) ne doit
+            # pas tuer l'étape (bash -eo pipefail). On capture l'erreur et on
+            # retraite comme "unknown" pour continuer à poller.
+            set +e
+            RAW=$(curl -s --max-time 30 --connect-timeout 10 -u "${{ inputs.awx-username }}:${{ inputs.awx-password }}" \
+              "http://ansible.cluster.auctelia.com/api/v2/jobs/${JOB_ID}/")
+            set -e
+            STATUS=$(echo "$RAW" | jq -r '.status // "unknown"' 2>/dev/null || echo "unknown")
+
             echo "Job status: ${STATUS} (elapsed: ${ELAPSED}s)"
             
             case "$STATUS" in
@@ -277,7 +319,7 @@ runs:
           
           echo "Rolling back to version: ${PREVIOUS_VERSION}"
           
-          ROLLBACK_RESPONSE=$(curl -s -X POST "http://ansible.cluster.auctelia.com/api/v2/job_templates/${{ inputs.awx-services-id }}/launch/" \
+          ROLLBACK_RESPONSE=$(curl -s --max-time 30 --connect-timeout 10 -X POST "http://ansible.cluster.auctelia.com/api/v2/job_templates/${{ inputs.awx-services-id }}/launch/" \
             -H "Content-Type: application/json" \
             -u "${{ inputs.awx-username }}:${{ inputs.awx-password }}" \
             -d "{
@@ -304,10 +346,12 @@ runs:
           INTERVAL=10
           
           while [ $ELAPSED -lt $TIMEOUT ]; do
-            ROLLBACK_STATUS=$(curl -s -u "${{ inputs.awx-username }}:${{ inputs.awx-password }}" \
-              "http://ansible.cluster.auctelia.com/api/v2/jobs/${ROLLBACK_JOB_ID}/" \
-              | jq -r '.status // "unknown"')
-            
+            set +e
+            RAW=$(curl -s --max-time 30 --connect-timeout 10 -u "${{ inputs.awx-username }}:${{ inputs.awx-password }}" \
+              "http://ansible.cluster.auctelia.com/api/v2/jobs/${ROLLBACK_JOB_ID}/")
+            set -e
+            ROLLBACK_STATUS=$(echo "$RAW" | jq -r '.status // "unknown"' 2>/dev/null || echo "unknown")
+
             echo "Rollback status: ${ROLLBACK_STATUS} (elapsed: ${ELAPSED}s)"
             
             case "$ROLLBACK_STATUS" in
