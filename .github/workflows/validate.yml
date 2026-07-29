@@ -1,0 +1,24 @@
+name: Validate actions
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate action metadata
+        run: |
+          npx --yes @action-validator/cli@0.6.0 actions/deploy-ansible/action.yml
+          npx --yes @action-validator/cli@0.6.0 actions/migrate/action.yml
+
+      - name: Check shared scripts
+        run: shellcheck actions/_shared/*.sh
+
+      - name: Test deployment recovery
+        run: bash tests/deployment-recovery.sh
