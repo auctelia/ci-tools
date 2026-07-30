@@ -73,107 +73,49 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Checkout repository
-      uses: actions/checkout@v6
-      with:
-          fetch-depth: 0
-
     - name: Install Dependencies
       run: |
           sudo apt-get update
-          sudo apt-get install -y openvpn ansible openssh-client traceroute
+          sudo apt-get install -y openvpn jq
       shell: bash
     
     - name: Set Up VPN Config
-      run: |
-          # Vérifier que le secret VPN_CONFIG existe et n'est pas vide
-          if [[ -z "${{ inputs.vpn-conf }}" ]]; then
-            echo "Erreur: Le secret VPN_CONFIG est vide ou n'existe pas"
-            exit 1
-          fi
-
-          # Écrire la configuration VPN directement (non encodée)
-          echo "${{ inputs.vpn-conf }}" > vpn.conf
-
-          # Setup certificate-based authentication for VPN
-          if [[ -n "${{ inputs.vpn-client-cert }}" && -n "${{ inputs.vpn-client-key }}" ]]; then
-            echo "${{ inputs.vpn-client-cert }}" > github.crt
-            echo "${{ inputs.vpn-client-key }}" > github.key
-            echo "cert github.crt" >> vpn.conf
-            echo "key github.key" >> vpn.conf
-            chmod 600 github.key  # Secure the private key file
-          fi
-
-          # Add CA certificate if available
-          if [[ -n "${{ inputs.vpn-ca-cert }}" ]]; then
-            echo "${{ inputs.vpn-ca-cert }}" > ca.crt
-            echo "ca ca.crt" >> vpn.conf
-          fi
-
-          # Add TLS auth key if available
-          if [[ -n "${{ inputs.vpn-ta-key }}" ]]; then
-            echo "${{ inputs.vpn-ta-key }}" > ta.key
-            echo "tls-auth ta.key 1" >> vpn.conf
-            chmod 600 ta.key  # Secure the TLS auth key file
-          fi
-
-          # Vérifier que le fichier vpn.conf a été créé
-          if [[ ! -f vpn.conf ]]; then
-            echo "Erreur: Le fichier vpn.conf n'a pas été créé"
-            exit 1
-          fi
-
-          echo "Configuration VPN configurée avec succès"
+      run: bash "$GITHUB_ACTION_PATH/../_shared/write-vpn-config.sh"
       shell: bash
+      env:
+        VPN_CONFIG: ${{ inputs.vpn-conf }}
+        VPN_CLIENT_CERT: ${{ inputs.vpn-client-cert }}
+        VPN_CLIENT_KEY: ${{ inputs.vpn-client-key }}
+        VPN_CA_CERT: ${{ inputs.vpn-ca-cert }}
+        VPN_TA_KEY: ${{ inputs.vpn-ta-key }}
 
     - name: Connect to VPN
-      run: |
-                  sudo openvpn --config vpn.conf --daemon
-
-                  echo "=== Attente de l'établissement du tunnel VPN ==="
-                  MAX_WAIT=30
-                  WAITED=0
-                  while [[ $WAITED -lt $MAX_WAIT ]]; do
-                    if ip a show tun0 > /dev/null 2>&1; then
-                      echo "Interface VPN tun0 détectée après ${WAITED}s"
-                      sleep 5  # stabilisation
-                      break
-                    fi
-                    sleep 2
-                    WAITED=$((WAITED + 2))
-                  done
-
-                  if ! ip a show tun0 > /dev/null 2>&1; then
-                    echo "Erreur: le tunnel VPN (tun0) ne s'est pas établi en ${MAX_WAIT}s"
-                    exit 1
-                  fi
-
-                  echo "=== Debug: interfaces VPN ==="
-                  ip a
-                  echo "=== Vérification des routes ==="
-                  ip route
-                  echo "=== Traceroute ==="
-                  traceroute ansible.cluster.auctelia.com || true
-                  echo "=== Test DNS ==="
-                  nslookup ansible.cluster.auctelia.com || true
-                  echo "=== Test ping ==="
-                  ping -c 3 ansible.cluster.auctelia.com || true
-      shell: bash
-
-    - name: Fix route to cluster
-      run: |
-          sudo ip route del 10.1.0.0/20 dev eth0 || true
-          sudo ip route add 10.0.0.0/16 dev tun0 || true
+      run: bash "$GITHUB_ACTION_PATH/../_shared/connect-vpn.sh" vpn.conf
       shell: bash
 
     - name: Get Current Deployment State
       id: get-current-state
       run: |
-          # Get current running version before deployment
-          CURRENT_VERSION=$(curl -s --max-time 30 --connect-timeout 10 -u "${{ inputs.awx-username }}:${{ inputs.awx-password }}" \
-            "http://ansible.cluster.auctelia.com/api/v2/job_templates/${{ inputs.awx-services-id }}/" \
-            | jq -r '.extra_vars.deploy_image_tag // "unknown"' || echo "unknown")
-          
+          RESPONSE=$(curl -sS --max-time 30 --connect-timeout 10 \
+            -u "${{ inputs.awx-username }}:${{ inputs.awx-password }}" \
+            "http://ansible.cluster.auctelia.com/api/v2/job_templates/${{ inputs.awx-services-id }}/jobs/?status=successful&order_by=-finished&page_size=200" \
+            || echo '{"results":[]}')
+
+          CURRENT_VERSION=$(jq -r --arg deploy_env "${{ inputs.deploy-env }}" '
+            def job_vars:
+              if (.extra_vars | type) == "string"
+              then (.extra_vars | fromjson? // {})
+              else (.extra_vars // {})
+              end;
+
+            first(
+              .results[]
+              | job_vars
+              | select(.deploy_env == $deploy_env)
+              | .deploy_image_tag
+            ) // "unknown"
+          ' <<<"$RESPONSE" 2>/dev/null || echo "unknown")
+
           echo "current-version=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
           echo "Previous deployment version: ${CURRENT_VERSION}"
       shell: bash
@@ -181,98 +123,38 @@ runs:
     - name: Call Ansible Deployment API
       id: deploy
       run: |
-                # Le tunnel VPN perd fréquemment le paquet de réponse d'un POST
-                # alors qu'AWX a bien reçu et lancé le job. On ne fait donc pas
-                # échouer l'étape sur une erreur réseau de réception/envoi : on
-                # retombe sur la récupération du dernier job du template.
-                set +e
-                RESPONSE=$(curl -s --max-time 30 --connect-timeout 10 \
-                  -X POST "http://ansible.cluster.auctelia.com/api/v2/job_templates/${{ inputs.awx-services-id }}/launch/" \
-                  -H "Content-Type: application/json" \
-                  -u "${{ inputs.awx-username }}:${{ inputs.awx-password }}" \
-                  -d '{
-                        "extra_vars":{
-                          "deploy_env": "${{ inputs.deploy-env }}",
-                          "deploy_image_tag": "v${{ github.run_number }}",
-                          "docker_image": "${{ inputs.docker-image }}",
-                          "time_bypass": "${{ inputs.time-bypass }}"
-                        }
-                    }')
-                CURL_EXIT_CODE=$?
-                set -e
+          AWX_EXTRA_VARS=$(jq -nc \
+            --arg deploy_env "${{ inputs.deploy-env }}" \
+            --arg deploy_image_tag "v${{ inputs.version-number }}" \
+            --arg docker_image "${{ inputs.docker-image }}" \
+            --arg time_bypass "${{ inputs.time-bypass }}" \
+            '{
+              deploy_env: $deploy_env,
+              deploy_image_tag: $deploy_image_tag,
+              docker_image: $docker_image,
+              time_bypass: $time_bypass
+            }')
+          AWX_MATCH_VARS=$(jq -c 'del(.time_bypass)' <<<"$AWX_EXTRA_VARS")
 
-                JOB_ID=$(echo "$RESPONSE" | jq -r '.id // empty' 2>/dev/null || echo "")
-
-                # Codes curl réseau: 7 connect, 28 timeout, 55 send, 56 recv.
-                # La requête a probablement abouti côté AWX malgré l'erreur.
-                if [[ -z "$JOB_ID" ]]; then
-                  echo "Réponse de lancement vide ou incomplète (curl exit ${CURL_EXIT_CODE})."
-                  echo "Réponse: $RESPONSE"
-                  echo "Récupération du dernier job du template ${{ inputs.awx-services-id }}..."
-                  JOB_ID=$(curl -s --max-time 30 --connect-timeout 10 \
-                    -u "${{ inputs.awx-username }}:${{ inputs.awx-password }}" \
-                    "http://ansible.cluster.auctelia.com/api/v2/job_templates/${{ inputs.awx-services-id }}/jobs/?order_by=-created&page_size=1" \
-                    | jq -r '.results[0].id // empty' 2>/dev/null || echo "")
-                fi
-
-                if [[ -z "$JOB_ID" ]]; then
-                  echo "Échec: impossible de récupérer un job ID, même en fallback."
-                  exit 1
-                fi
-
-                echo "job-id=${JOB_ID}" >> $GITHUB_OUTPUT
-                echo "Deployment job started with ID: ${JOB_ID}"
+          export AWX_EXTRA_VARS AWX_MATCH_VARS
+          bash "$GITHUB_ACTION_PATH/../_shared/launch-awx-job.sh"
       shell: bash
+      env:
+        AWX_TEMPLATE_ID: ${{ inputs.awx-services-id }}
+        AWX_USERNAME: ${{ inputs.awx-username }}
+        AWX_PASSWORD: ${{ inputs.awx-password }}
+        VPN_CONNECT_SCRIPT: ${{ github.action_path }}/../_shared/connect-vpn.sh
 
     - name: Wait for Deployment to Complete
       id: wait-deploy
-      run: |
-          JOB_ID="${{ steps.deploy.outputs.job-id }}"
-          TIMEOUT=600  # 10 minutes timeout
-          ELAPSED=0
-          INTERVAL=10
-          
-          echo "Waiting for deployment job ${JOB_ID} to complete..."
-          
-          while [ $ELAPSED -lt $TIMEOUT ]; do
-            # Le VPN est intermittent: un poll qui échoue (timeout/drop) ne doit
-            # pas tuer l'étape (bash -eo pipefail). On capture l'erreur et on
-            # retraite comme "unknown" pour continuer à poller.
-            set +e
-            RAW=$(curl -s --max-time 30 --connect-timeout 10 -u "${{ inputs.awx-username }}:${{ inputs.awx-password }}" \
-              "http://ansible.cluster.auctelia.com/api/v2/jobs/${JOB_ID}/")
-            set -e
-            STATUS=$(echo "$RAW" | jq -r '.status // "unknown"' 2>/dev/null || echo "unknown")
-
-            echo "Job status: ${STATUS} (elapsed: ${ELAPSED}s)"
-            
-            case "$STATUS" in
-              "successful")
-                echo "deployment-status=success" >> $GITHUB_OUTPUT
-                echo "Deployment completed successfully!"
-                exit 0
-                ;;
-              "failed"|"error"|"canceled")
-                echo "deployment-status=failed" >> $GITHUB_OUTPUT
-                echo "Deployment failed with status: ${STATUS}"
-                exit 1
-                ;;
-              "running"|"pending"|"waiting")
-                sleep $INTERVAL
-                ELAPSED=$((ELAPSED + INTERVAL))
-                ;;
-              *)
-                echo "Unknown status: ${STATUS}"
-                sleep $INTERVAL
-                ELAPSED=$((ELAPSED + INTERVAL))
-                ;;
-            esac
-          done
-          
-          echo "deployment-status=timeout" >> $GITHUB_OUTPUT
-          echo "Deployment timed out after ${TIMEOUT} seconds"
-          exit 1
+      run: bash "$GITHUB_ACTION_PATH/../_shared/poll-awx-job.sh"
       shell: bash
+      env:
+        AWX_JOB_ID: ${{ steps.deploy.outputs.job-id }}
+        AWX_USERNAME: ${{ inputs.awx-username }}
+        AWX_PASSWORD: ${{ inputs.awx-password }}
+        AWX_STATUS_OUTPUT: deployment-status
+        VPN_CONNECT_SCRIPT: ${{ github.action_path }}/../_shared/connect-vpn.sh
 
     - name: Health Check (if URL provided)
       id: health-check
@@ -304,83 +186,59 @@ runs:
           exit 1
       shell: bash
 
-    - name: Rollback on Failure
-      id: rollback
-      if: failure() && inputs.rollback-enabled == 'true' && steps.get-current-state.outputs.current-version != 'unknown'
+    - name: Start Rollback
+      id: start-rollback
+      if: >-
+        failure() &&
+        inputs.rollback-enabled == 'true' &&
+        steps.get-current-state.outputs.current-version != 'unknown' &&
+        (
+          steps.wait-deploy.outputs.deployment-status == 'failed' ||
+          (
+            steps.wait-deploy.outputs.deployment-status == 'success' &&
+            steps.health-check.outcome == 'failure'
+          )
+        )
       run: |
-          echo "Deployment or health check failed. Initiating rollback..."
           PREVIOUS_VERSION="${{ steps.get-current-state.outputs.current-version }}"
-          
-          if [[ "$PREVIOUS_VERSION" == "unknown" || "$PREVIOUS_VERSION" == "null" ]]; then
-            echo "Cannot rollback: previous version is unknown"
-            echo "rollback-status=skipped" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          echo "Rolling back to version: ${PREVIOUS_VERSION}"
-          
-          ROLLBACK_RESPONSE=$(curl -s --max-time 30 --connect-timeout 10 -X POST "http://ansible.cluster.auctelia.com/api/v2/job_templates/${{ inputs.awx-services-id }}/launch/" \
-            -H "Content-Type: application/json" \
-            -u "${{ inputs.awx-username }}:${{ inputs.awx-password }}" \
-            -d "{
-                  \"extra_vars\":{
-                    \"deploy_env\": \"${{ inputs.deploy-env }}\",
-                    \"deploy_image_tag\": \"${PREVIOUS_VERSION}\",
-                    \"docker_image\": \"${{ inputs.docker-image }}\",
-                    \"time_bypass\": \"${{ inputs.time-bypass }}\"
-                  }
-                }")
-          
-          ROLLBACK_JOB_ID=$(echo "$ROLLBACK_RESPONSE" | jq -r '.id // empty')
-          if [[ -z "$ROLLBACK_JOB_ID" ]]; then
-            echo "Failed to start rollback job"
-            echo "rollback-status=failed" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-          
-          echo "Rollback job started with ID: ${ROLLBACK_JOB_ID}"
-          
-          # Wait for rollback to complete
-          TIMEOUT=600
-          ELAPSED=0
-          INTERVAL=10
-          
-          while [ $ELAPSED -lt $TIMEOUT ]; do
-            set +e
-            RAW=$(curl -s --max-time 30 --connect-timeout 10 -u "${{ inputs.awx-username }}:${{ inputs.awx-password }}" \
-              "http://ansible.cluster.auctelia.com/api/v2/jobs/${ROLLBACK_JOB_ID}/")
-            set -e
-            ROLLBACK_STATUS=$(echo "$RAW" | jq -r '.status // "unknown"' 2>/dev/null || echo "unknown")
+          PREVIOUS_IMAGE="${{ inputs.docker-image }}"
+          PREVIOUS_IMAGE="${PREVIOUS_IMAGE%:*}:${PREVIOUS_VERSION}"
 
-            echo "Rollback status: ${ROLLBACK_STATUS} (elapsed: ${ELAPSED}s)"
-            
-            case "$ROLLBACK_STATUS" in
-              "successful")
-                echo "rollback-status=success" >> $GITHUB_OUTPUT
-                echo "Rollback completed successfully!"
-                exit 0
-                ;;
-              "failed"|"error"|"canceled")
-                echo "rollback-status=failed" >> $GITHUB_OUTPUT
-                echo "Rollback failed with status: ${ROLLBACK_STATUS}"
-                exit 1
-                ;;
-              "running"|"pending"|"waiting")
-                sleep $INTERVAL
-                ELAPSED=$((ELAPSED + INTERVAL))
-                ;;
-              *)
-                echo "Unknown rollback status: ${ROLLBACK_STATUS}"
-                sleep $INTERVAL
-                ELAPSED=$((ELAPSED + INTERVAL))
-                ;;
-            esac
-          done
-          
-          echo "rollback-status=timeout" >> $GITHUB_OUTPUT
-          echo "Rollback timed out after ${TIMEOUT} seconds"
-          exit 1
+          AWX_EXTRA_VARS=$(jq -nc \
+            --arg deploy_env "${{ inputs.deploy-env }}" \
+            --arg deploy_image_tag "$PREVIOUS_VERSION" \
+            --arg docker_image "$PREVIOUS_IMAGE" \
+            --arg time_bypass "${{ inputs.time-bypass }}" \
+            '{
+              deploy_env: $deploy_env,
+              deploy_image_tag: $deploy_image_tag,
+              docker_image: $docker_image,
+              time_bypass: $time_bypass
+            }')
+          AWX_MATCH_VARS=$(jq -c 'del(.time_bypass)' <<<"$AWX_EXTRA_VARS")
+
+          export AWX_EXTRA_VARS AWX_MATCH_VARS
+          bash "$GITHUB_ACTION_PATH/../_shared/launch-awx-job.sh"
       shell: bash
+      env:
+        AWX_TEMPLATE_ID: ${{ inputs.awx-services-id }}
+        AWX_USERNAME: ${{ inputs.awx-username }}
+        AWX_PASSWORD: ${{ inputs.awx-password }}
+        AWX_JOB_OUTPUT: job-id
+        VPN_CONNECT_SCRIPT: ${{ github.action_path }}/../_shared/connect-vpn.sh
+
+    - name: Wait for Rollback to Complete
+      id: rollback
+      if: always() && steps.start-rollback.outputs.job-id != ''
+      run: bash "$GITHUB_ACTION_PATH/../_shared/poll-awx-job.sh"
+      shell: bash
+      env:
+        AWX_JOB_ID: ${{ steps.start-rollback.outputs.job-id }}
+        AWX_USERNAME: ${{ inputs.awx-username }}
+        AWX_PASSWORD: ${{ inputs.awx-password }}
+        AWX_STATUS_OUTPUT: rollback-status
+        AWX_POLL_TIMEOUT: "600"
+        VPN_CONNECT_SCRIPT: ${{ github.action_path }}/../_shared/connect-vpn.sh
       
     - name: Disconnect VPN
       if: always()
@@ -402,6 +260,10 @@ runs:
             STATUS="✅ SUCCESS"
             COLOR="good"
             MESSAGE="Deployment completed successfully"
+          elif [[ "$DEPLOY_STATUS" == "unknown" ]]; then
+            STATUS="⚠️ UNCONFIRMED"
+            COLOR="warning"
+            MESSAGE="AWX status could not be confirmed; no rollback was started"
           elif [[ "$ROLLBACK_STATUS" == "success" ]]; then
             STATUS="⚠️ ROLLED BACK"
             COLOR="warning"
@@ -440,7 +302,7 @@ runs:
                   },
                   {
                     "title": "Version",
-                    "value": "v${{ github.run_number }}",
+                    "value": "v${{ inputs.version-number }}",
                     "short": true
                   },
                   {
@@ -467,5 +329,6 @@ runs:
           # Send notification
           curl -X POST -H 'Content-type: application/json' \
             --data "${PAYLOAD}" \
-            "${{ inputs.tars-slack-webhook-url }}"
+            "${{ inputs.tars-slack-webhook-url }}" \
+            || echo "Warning: Slack notification failed"
       shell: bash

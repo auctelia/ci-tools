@@ -1,5 +1,5 @@
 name: 'Migrate Database'
-description: 'Run database migrations via VPN after deployment (npm run migrate)'
+description: 'Run database migrations through VPN (npm run migrate)'
 
 inputs:
   app-name:
@@ -62,56 +62,21 @@ runs:
     - name: Install VPN dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y openvpn traceroute
+        sudo apt-get install -y openvpn
       shell: bash
 
     - name: Set Up VPN Config
-      run: |
-        if [[ -z "${{ inputs.vpn-conf }}" ]]; then
-          echo "Error: vpn-conf input is empty"
-          exit 1
-        fi
-
-        echo "${{ inputs.vpn-conf }}" > vpn.conf
-
-        if [[ -n "${{ inputs.vpn-client-cert }}" && -n "${{ inputs.vpn-client-key }}" ]]; then
-          echo "${{ inputs.vpn-client-cert }}" > github.crt
-          echo "${{ inputs.vpn-client-key }}" > github.key
-          echo "cert github.crt" >> vpn.conf
-          echo "key github.key" >> vpn.conf
-          chmod 600 github.key
-        fi
-
-        if [[ -n "${{ inputs.vpn-ca-cert }}" ]]; then
-          echo "${{ inputs.vpn-ca-cert }}" > ca.crt
-          echo "ca ca.crt" >> vpn.conf
-        fi
-
-        if [[ -n "${{ inputs.vpn-ta-key }}" ]]; then
-          echo "${{ inputs.vpn-ta-key }}" > ta.key
-          echo "tls-auth ta.key 1" >> vpn.conf
-          chmod 600 ta.key
-        fi
-
-        echo "VPN configuration written"
+      run: bash "$GITHUB_ACTION_PATH/../_shared/write-vpn-config.sh"
       shell: bash
+      env:
+        VPN_CONFIG: ${{ inputs.vpn-conf }}
+        VPN_CLIENT_CERT: ${{ inputs.vpn-client-cert }}
+        VPN_CLIENT_KEY: ${{ inputs.vpn-client-key }}
+        VPN_CA_CERT: ${{ inputs.vpn-ca-cert }}
+        VPN_TA_KEY: ${{ inputs.vpn-ta-key }}
 
     - name: Connect to VPN
-      run: |
-        sudo openvpn --config vpn.conf --daemon
-        sleep 10
-        echo "=== VPN interfaces ==="
-        ip a
-        echo "=== Routes ==="
-        ip route
-        echo "=== Traceroute ==="
-        traceroute ansible.cluster.auctelia.com || true
-      shell: bash
-
-    - name: Fix route to cluster
-      run: |
-        sudo ip route del 10.1.0.0/20 dev eth0 || true
-        sudo ip route add 10.0.0.0/16 dev tun0
+      run: bash "$GITHUB_ACTION_PATH/../_shared/connect-vpn.sh" vpn.conf
       shell: bash
 
     - name: Run database migration
@@ -119,16 +84,6 @@ runs:
       run: npm run migrate
       shell: bash
       continue-on-error: true
-      env:
-        PG_HOST: ${{ inputs.pg-host }}
-        PG_USER: ${{ inputs.pg-user }}
-        PG_PASSWORD: ${{ inputs.pg-password }}
-        PG_DB: ${{ inputs.pg-db }}
-
-    - name: Rollback migration on failure
-      if: steps.migration.outcome == 'failure'
-      run: npm run migrate:down
-      shell: bash
       env:
         PG_HOST: ${{ inputs.pg-host }}
         PG_USER: ${{ inputs.pg-user }}
@@ -152,9 +107,9 @@ runs:
           COLOR="good"
           MESSAGE="Migration completed successfully"
         else
-          STATUS="FAILED & ROLLED BACK"
+          STATUS="FAILED"
           COLOR="danger"
-          MESSAGE="Migration failed — migrate:down was executed"
+          MESSAGE="Migration did not complete; no automatic down migration was run"
         fi
 
         PAYLOAD=$(cat << EOF
@@ -179,7 +134,8 @@ runs:
 
         curl -s -X POST "${{ inputs.tars-slack-webhook-url }}" \
           -H 'Content-type: application/json' \
-          --data "${PAYLOAD}"
+          --data "${PAYLOAD}" \
+          || echo "Warning: Slack notification failed"
       shell: bash
 
     - name: Fail if migration failed
