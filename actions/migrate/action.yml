@@ -89,6 +89,7 @@ runs:
         PG_USER: ${{ inputs.pg-user }}
         PG_PASSWORD: ${{ inputs.pg-password }}
         PG_DB: ${{ inputs.pg-db }}
+        PG_SSL: "true"
 
     - name: Disconnect VPN
       if: always()
