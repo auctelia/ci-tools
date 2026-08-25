@@ -12,6 +12,11 @@ fi
 umask 077
 printf '%s\n' "$VPN_CONFIG" >vpn.conf
 
+# Clamp TCP MSS so TLS handshake packets (larger than plain Postgres traffic) never exceed
+# the tunnel's effective MTU. Without this, oversized packets get silently dropped whenever
+# path MTU discovery is blackholed, hanging the connection for minutes before an ECONNRESET.
+printf '%s\n' "mssfix 1400" >>vpn.conf
+
 if [[ -n "${VPN_CLIENT_CERT:-}" ]]; then
   printf '%s\n' "$VPN_CLIENT_CERT" >github.crt
   printf '%s\n' "$VPN_CLIENT_KEY" >github.key
