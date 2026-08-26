@@ -20,7 +20,7 @@ function go() {
     exit 1;
   fi
 
-  if [ -n "$SONAQUBE" ]
+  if [ "$SONAQUBE" = "true" ]
     then
       echo 'We get full git history for SonarQube'
       git fetch --prune --unshallow
