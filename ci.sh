@@ -20,14 +20,14 @@ function go() {
     exit 1;
   fi
 
+  if [ "$SONAQUBE" = "true" ] && { [ -z "$SONAR_HOST_URL" ] || [ -z "$SONAR_TOKEN" ]; }
+    then
+      echo '::warning::SonarQube skipped: SONAR_HOST_URL or SONAR_TOKEN is missing'
+      SONAQUBE=false
+  fi
+
   if [ "$SONAQUBE" = "true" ]
     then
-      if [ -z "$SONAR_HOST_URL" ] || [ -z "$SONAR_TOKEN" ]
-        then
-          echo 'SONAR_HOST_URL and SONAR_TOKEN must be set when --sonarqube=true'
-          exit 1
-      fi
-
       echo 'We get full git history for SonarQube'
       git fetch --prune --unshallow
 
@@ -72,7 +72,7 @@ function go() {
         sonarsource/sonar-scanner-cli; then
         echo 'SonarQube analysis sent';
       else
-        exit 1;
+        echo '::warning::SonarQube analysis failed, see the scanner output above';
       fi
   fi
 
