@@ -18,6 +18,12 @@ inputs:
   build-params:
     description: 'Additional build parameters'
     required: false
+  sonar-token:
+    description: 'SonarQube token for analysis'
+    required: false
+  sonar-host-url:
+    description: 'SonarQube host URL'
+    required: false
 
 runs:
   using: "composite"
@@ -52,3 +58,6 @@ runs:
       run: ./ci.sh go ${{inputs.build-params}} --sonarqube=${{inputs.sonar-active}} --app-name=${{ inputs.app-name }} --docker-username=${{ github.actor }}  --docker-password=${{ inputs.github-token }} --version-number=${{inputs.github-run-number}} --docker-registry=ghcr.io
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
+        SONAR_TOKEN: ${{ inputs.sonar-token }}
+        SONAR_HOST_URL: ${{ inputs.sonar-host-url }}
+        GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}

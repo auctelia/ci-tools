@@ -22,6 +22,12 @@ function go() {
 
   if [ "$SONAQUBE" = "true" ]
     then
+      if [ -z "$SONAR_HOST_URL" ] || [ -z "$SONAR_TOKEN" ]
+        then
+          echo 'SONAR_HOST_URL and SONAR_TOKEN must be set when --sonarqube=true'
+          exit 1
+      fi
+
       echo 'We get full git history for SonarQube'
       git fetch --prune --unshallow
 
@@ -39,6 +45,12 @@ function go() {
 
       if [ -n "$GITHUB_BASE_REF" ]
         then
+          if [ -z "$GITHUB_PR_NUMBER" ]
+            then
+              GITHUB_PR_NUMBER=${GITHUB_REF#refs/pull/}
+              GITHUB_PR_NUMBER=${GITHUB_PR_NUMBER%%/*}
+          fi
+
           SONAR_OPTS="${SONAR_OPTS} -Dsonar.pullrequest.branch=$GITHUB_HEAD_REF -Dsonar.pullrequest.key=$GITHUB_PR_NUMBER -Dsonar.pullrequest.base=$GITHUB_BASE_REF -Dsonar.pullrequest.github.repository=$GITHUB_REPOSITORY"
         else
           SONAR_OPTS="${SONAR_OPTS} -Dsonar.branch.name=$BRANCH_NAME"
@@ -51,13 +63,17 @@ function go() {
 
       echo "${SONAR_OPTS}"
       echo 'Run SonarQube analyzer'
-      docker run \
+      if docker run \
         --rm \
         -e SONAR_HOST_URL="${SONAR_HOST_URL}" \
         -e SONAR_TOKEN="${SONAR_TOKEN}" \
         -e SONAR_SCANNER_OPTS="${SONAR_OPTS}" \
         -v "${GITHUB_WORKSPACE}:/usr/src" \
-        sonarsource/sonar-scanner-cli
+        sonarsource/sonar-scanner-cli; then
+        echo 'SonarQube analysis sent';
+      else
+        exit 1;
+      fi
   fi
 
   if [ -z "$BYPASS_PUSH" ]
