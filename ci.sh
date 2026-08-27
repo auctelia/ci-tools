@@ -41,7 +41,7 @@ function go() {
           BRANCH_NAME=${GITHUB_REF##*/}
       fi
 
-      SONAR_OPTS="-Dsonar.organization=auctelia -Dsonar.projectKey=${GITHUB_REPOSITORY_OWNER}_${REPOSITORY_NAME} -Dsonar.sources=src -Dsonar.scm.provider=git -Dsonar.javascript.lcov.reportPaths=./coverage/lcov.info -Dsonar.javascript.node.maxspace=4096"
+      SONAR_OPTS="-Dsonar.organization=auctelia -Dsonar.projectKey=${GITHUB_REPOSITORY_OWNER}_${REPOSITORY_NAME} -Dsonar.sources=src -Dsonar.scm.provider=git -Dsonar.javascript.lcov.reportPaths=./coverage/lcov.info -Dsonar.javascript.node.maxspace=6144"
 
       if [ -n "$GITHUB_BASE_REF" ]
         then
