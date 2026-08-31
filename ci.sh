@@ -14,7 +14,11 @@ function go() {
       docker compose --project-name app up waithosts
   fi
 
-  if docker compose --project-name app run $DCP_SERVICE_NAME npm test; then
+  # The suite runs inside the container while the SonarQube scanner below reads
+  # ./coverage/lcov.info from the workspace, so the report has to be mounted out —
+  # otherwise Sonar reports 0% coverage on new code. Repos already declaring this
+  # volume in their compose file are unaffected: the same target simply wins.
+  if docker compose --project-name app run -v "${GITHUB_WORKSPACE:-$PWD}/coverage:/var/www/coverage" $DCP_SERVICE_NAME npm test; then
     echo 'Test Success';
   else
     exit 1;
