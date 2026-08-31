@@ -2,6 +2,7 @@
 
 function go() {
   IMAGE_NAME=$DOCKER_REGISTRY/$GITHUB_REPOSITORY/$APP_NAME:v$VERSION_NUMBER
+  TEST_CONTAINER_NAME=app-test-run
 
   docker compose --project-name app build --build-arg build_number_ci=v$VERSION_NUMBER $DCP_SERVICE_NAME
 
@@ -15,11 +16,26 @@ function go() {
   fi
 
   # The suite runs inside the container while the SonarQube scanner below reads
-  # ./coverage/lcov.info from the workspace, so the report has to be mounted out —
-  # otherwise Sonar reports 0% coverage on new code. Repos already declaring this
-  # volume in their compose file are unaffected: the same target simply wins.
-  if docker compose --project-name app run -v "${GITHUB_WORKSPACE:-$PWD}/coverage:/var/www/coverage" $DCP_SERVICE_NAME npm test; then
-    echo 'Test Success';
+  # ./coverage/lcov.info from the workspace, so the report has to come out of the
+  # container — otherwise Sonar reports 0% coverage on new code. Copy it out
+  # instead of bind-mounting it: coverage tools wipe their report directory before
+  # running (vitest/v8 does an rm -rf on it), and a mount point cannot be removed,
+  # which fails the whole suite with EBUSY.
+  docker rm -f "$TEST_CONTAINER_NAME" >/dev/null 2>&1
+
+  docker compose --project-name app run --name "$TEST_CONTAINER_NAME" $DCP_SERVICE_NAME npm test
+  TEST_STATUS=$?
+
+  mkdir -p ./coverage
+  if ! docker cp "$TEST_CONTAINER_NAME:/var/www/coverage/." ./coverage 2>/dev/null
+    then
+      echo '::warning::No coverage report found in the test container'
+  fi
+  docker rm -f "$TEST_CONTAINER_NAME" >/dev/null 2>&1
+
+  if [ $TEST_STATUS -eq 0 ]
+    then
+      echo 'Test Success';
   else
     exit 1;
   fi
