@@ -16,6 +16,7 @@ jobs:
         run: |
           npx --yes @action-validator/cli@0.6.0 actions/deploy-ansible/action.yml
           npx --yes @action-validator/cli@0.6.0 actions/migrate/action.yml
+          npx --yes @action-validator/cli@0.6.0 actions/connect-vpn/action.yml
 
       - name: Check shared scripts
         run: shellcheck actions/_shared/*.sh

@@ -69,6 +69,10 @@ inputs:
     description: "Bypass time-based deployment restrictions in AWX"
     default: "false"
     required: false
+  awx-extra-vars:
+    description: "JSON object of extra AWX variables sent with the deploy and the rollback (e.g. {\"deploy_app\":\"admin-front\"}); AWX may drop them, so they are not used to find a lost launch"
+    default: "{}"
+    required: false
 
 runs:
   using: "composite"
@@ -97,6 +101,7 @@ runs:
 
     - name: Get Current Deployment State
       id: get-current-state
+      if: inputs.rollback-enabled == 'true'
       run: |
           RESPONSE=$(curl -sS --max-time 30 --connect-timeout 10 \
             -u "${{ inputs.awx-username }}:${{ inputs.awx-password }}" \
@@ -137,6 +142,7 @@ runs:
               time_bypass: $time_bypass
             }')
           AWX_MATCH_VARS=$(jq -c 'del(.time_bypass)' <<<"$AWX_EXTRA_VARS")
+          AWX_EXTRA_VARS=$(jq -c --argjson extra "$EXTRA_VARS" '$extra + .' <<<"$AWX_EXTRA_VARS")
 
           export AWX_EXTRA_VARS AWX_MATCH_VARS
           bash "$GITHUB_ACTION_PATH/../_shared/launch-awx-job.sh"
@@ -145,6 +151,7 @@ runs:
         AWX_TEMPLATE_ID: ${{ inputs.awx-services-id }}
         AWX_USERNAME: ${{ inputs.awx-username }}
         AWX_PASSWORD: ${{ inputs.awx-password }}
+        EXTRA_VARS: ${{ inputs.awx-extra-vars }}
         VPN_CONNECT_SCRIPT: ${{ github.action_path }}/../_shared/connect-vpn.sh
 
     - name: Wait for Deployment to Complete
@@ -218,6 +225,7 @@ runs:
               time_bypass: $time_bypass
             }')
           AWX_MATCH_VARS=$(jq -c 'del(.time_bypass)' <<<"$AWX_EXTRA_VARS")
+          AWX_EXTRA_VARS=$(jq -c --argjson extra "$EXTRA_VARS" '$extra + .' <<<"$AWX_EXTRA_VARS")
 
           export AWX_EXTRA_VARS AWX_MATCH_VARS
           bash "$GITHUB_ACTION_PATH/../_shared/launch-awx-job.sh"
@@ -226,6 +234,7 @@ runs:
         AWX_TEMPLATE_ID: ${{ inputs.awx-services-id }}
         AWX_USERNAME: ${{ inputs.awx-username }}
         AWX_PASSWORD: ${{ inputs.awx-password }}
+        EXTRA_VARS: ${{ inputs.awx-extra-vars }}
         AWX_JOB_OUTPUT: job-id
         VPN_CONNECT_SCRIPT: ${{ github.action_path }}/../_shared/connect-vpn.sh
 
