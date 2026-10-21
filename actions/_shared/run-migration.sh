@@ -11,6 +11,7 @@ MIGRATION_COMMAND="${MIGRATION_COMMAND:-npm run migrate}"
 ATTEMPTS="${MIGRATION_ATTEMPTS:-3}"
 RETRY_DELAY="${MIGRATION_RETRY_DELAY:-5}"
 CONTENTION_DELAY="${MIGRATION_CONTENTION_DELAY:-30}"
+STALL_TIMEOUT="${MIGRATION_STALL_TIMEOUT:-120}"
 VPN_CONNECT_SCRIPT="${VPN_CONNECT_SCRIPT:-}"
 VPN_CONFIG_PATH="${VPN_CONFIG_PATH:-vpn.conf}"
 VPN_LOG_PATH="${VPN_LOG_PATH:-${RUNNER_TEMP:-/tmp}/openvpn.log}"
@@ -22,6 +23,7 @@ SUMMARY_PATH="${GITHUB_STEP_SUMMARY:-/dev/null}"
 OUTPUTS_PATH="${GITHUB_OUTPUT:-/dev/null}"
 
 stage=""
+stalled=false
 reason=""
 hint=""
 retryable=false
@@ -186,6 +188,30 @@ write_summary() {
   } >>"$OUTPUTS_PATH"
 }
 
+# A connection cut mid-read leaves node waiting forever, so an attempt that has not started any
+# migration within STALL_TIMEOUT is killed and retried. Once a migration runs it is never killed.
+run_migration_command() {
+  local pid
+  local started=$SECONDS
+  stalled=false
+
+  # setsid gives the command its own process group so the watchdog can stop npm, node and tee together.
+  # shellcheck disable=SC2016 # expanded by the child shell
+  setsid bash -c '$0 2>&1 | tee "$1"; exit "${PIPESTATUS[0]}"' "$MIGRATION_COMMAND" "$OUTPUT_PATH" &
+  pid=$!
+
+  while kill -0 "$pid" 2>/dev/null; do
+    if ((SECONDS - started >= STALL_TIMEOUT)) && ! grep -q '"migrating"' "$OUTPUT_PATH"; then
+      stalled=true
+      kill -TERM -- "-${pid}" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
+      break
+    fi
+    sleep 1
+  done
+
+  wait "$pid"
+}
+
 reconnect_vpn() {
   [[ -n "$VPN_CONNECT_SCRIPT" ]] || return 0
   echo "Reconnecting the VPN before retrying"
@@ -221,15 +247,20 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
 
   if check_database_path; then
     echo "Database ${pg_ip}:${PG_PORT} is reachable through the VPN (attempt ${attempt}/${ATTEMPTS})"
-    # shellcheck disable=SC2086 # the command is a word list such as "npm run migrate"
-    $MIGRATION_COMMAND 2>&1 | tee "$OUTPUT_PATH"
-    status=${PIPESTATUS[0]}
+    run_migration_command
+    status=$?
     cat "$OUTPUT_PATH" >>"$HISTORY_PATH"
     if ((status == 0)); then
       write_summary success "$attempt"
       exit 0
+    elif [[ "$stalled" == true ]]; then
+      fail "Database connection" \
+        "no answer from the database for ${STALL_TIMEOUT}s before any migration started" \
+        "Nothing was applied; the attempt was stopped and is retried on a fresh VPN session." \
+        true
+    else
+      classify_migration_failure
     fi
-    classify_migration_failure
   fi
 
   if [[ "$retryable" != true || "$attempt" == "$ATTEMPTS" ]]; then

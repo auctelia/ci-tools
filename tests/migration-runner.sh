@@ -136,7 +136,31 @@ test_steps_aside_when_another_job_holds_the_vpn() (
   grep -q "session reset" "$GITHUB_STEP_SUMMARY"
 )
 
+test_retries_a_silent_hang_before_any_migration() (
+  with_network hang
+  export MIGRATION_STALL_TIMEOUT=2
+  MIGRATION_COMMAND=$(write_migrator hang "sleep 30" "exit 0")
+  export MIGRATION_COMMAND
+
+  bash "$RUNNER" >"${RUNNER_TEMP}/log"
+  [[ "$(<"$ATTEMPTS_PATH")" == 2 ]]
+  grep -q "no answer from the database for 2s" "${RUNNER_TEMP}/log"
+)
+
+test_lets_a_long_migration_run() (
+  with_network long-migration
+  export MIGRATION_STALL_TIMEOUT=1
+  MIGRATION_COMMAND=$(write_migrator long-migration "$(event migrating 20261021-a.js) sleep 3; $(event migrated 20261021-a.js) exit 0")
+  export MIGRATION_COMMAND
+
+  bash "$RUNNER" >"${RUNNER_TEMP}/log"
+  [[ "$(<"$ATTEMPTS_PATH")" == 1 ]]
+  grep -q '20261021-a.js' "$GITHUB_STEP_SUMMARY"
+)
+
 test_retries_a_reset_before_any_migration
+test_retries_a_silent_hang_before_any_migration
+test_lets_a_long_migration_run
 test_steps_aside_when_another_job_holds_the_vpn
 test_never_retries_a_reset_during_a_migration
 test_does_not_retry_a_migration_bug
