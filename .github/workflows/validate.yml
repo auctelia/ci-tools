@@ -22,3 +22,6 @@ jobs:
 
       - name: Test deployment recovery
         run: bash tests/deployment-recovery.sh
+
+      - name: Test migration runner
+        run: bash tests/migration-runner.sh

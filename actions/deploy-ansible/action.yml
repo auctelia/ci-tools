@@ -75,8 +75,9 @@ runs:
   steps:
     - name: Install Dependencies
       run: |
-          sudo apt-get update
-          sudo apt-get install -y openvpn jq
+          # The image's package lists already know openvpn (jq is preinstalled); refreshing them costs ~12s.
+          sudo apt-get install -y -qq --no-install-recommends openvpn jq >/dev/null \
+            || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends openvpn jq >/dev/null; }
       shell: bash
     
     - name: Set Up VPN Config
@@ -90,6 +91,7 @@ runs:
         VPN_TA_KEY: ${{ inputs.vpn-ta-key }}
 
     - name: Connect to VPN
+      id: vpn
       run: bash "$GITHUB_ACTION_PATH/../_shared/connect-vpn.sh" vpn.conf
       shell: bash
 
@@ -275,7 +277,20 @@ runs:
           else
             STATUS="❌ FAILED"
             COLOR="danger"
-            MESSAGE="Deployment failed"
+            if [[ "${{ steps.vpn.outcome }}" == "failure" ]]; then
+              MESSAGE="Deployment failed: the VPN did not connect"
+            elif [[ "${{ steps.deploy.outcome }}" == "failure" ]]; then
+              MESSAGE="Deployment failed: AWX could not be reached to launch the job"
+            elif [[ "$DEPLOY_STATUS" == "failed" ]]; then
+              MESSAGE="Deployment failed: the AWX playbook failed"
+            elif [[ "$HEALTH_STATUS" == "unhealthy" ]]; then
+              MESSAGE="Deployment failed: the health check did not pass"
+            else
+              MESSAGE="Deployment failed"
+            fi
+          fi
+          if [[ "$COLOR" != "good" ]] && sudo grep -q "Connection reset, restarting" "${RUNNER_TEMP}/openvpn.log" 2>/dev/null; then
+            MESSAGE="${MESSAGE} (another job was using the shared VPN certificate)"
           fi
           
           # Prepare Slack payload
