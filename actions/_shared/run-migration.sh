@@ -10,6 +10,7 @@ set -uo pipefail
 MIGRATION_COMMAND="${MIGRATION_COMMAND:-npm run migrate}"
 ATTEMPTS="${MIGRATION_ATTEMPTS:-3}"
 RETRY_DELAY="${MIGRATION_RETRY_DELAY:-5}"
+CONTENTION_DELAY="${MIGRATION_CONTENTION_DELAY:-30}"
 VPN_CONNECT_SCRIPT="${VPN_CONNECT_SCRIPT:-}"
 VPN_CONFIG_PATH="${VPN_CONFIG_PATH:-vpn.conf}"
 VPN_LOG_PATH="${VPN_LOG_PATH:-${RUNNER_TEMP:-/tmp}/openvpn.log}"
@@ -206,7 +207,15 @@ fi
 
 for attempt in $(seq 1 "$ATTEMPTS"); do
   if ((attempt > 1)); then
-    sleep "$RETRY_DELAY"
+    if (($(vpn_resets) > 0)); then
+      # Our reconnect would kick the other job's session in turn, so step aside while it works.
+      backoff=$((CONTENTION_DELAY * (attempt - 1)))
+      echo "::notice title=VPN shared with another job::the server reset this session; disconnecting for ${backoff}s so the other job can finish"
+      sudo pkill -x openvpn 2>/dev/null || true
+      sleep "$backoff"
+    else
+      sleep "$RETRY_DELAY"
+    fi
     reconnect_vpn || true
   fi
 
@@ -228,6 +237,10 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
   fi
   echo "::warning title=Migration attempt ${attempt}/${ATTEMPTS} failed (${stage})::${reason}"
 done
+
+if [[ "$retryable" == true ]] && (($(vpn_resets) > 0)); then
+  hint="Another CI job was connected with the same VPN certificate, and the VPN server keeps one session per certificate. Re-run once it is done; enabling duplicate-cn on the VPN server (auctelia/Infrastructure) removes this limit."
+fi
 
 echo "::error title=Migration failed: ${stage}::${reason}. ${hint}"
 write_summary failure "$attempt"

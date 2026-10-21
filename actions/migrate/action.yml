@@ -60,41 +60,31 @@ runs:
         APP_NAME: ${{ inputs.app-name }}
         DEPLOY_ENV: ${{ inputs.deploy-env }}
 
+    # Setup work overlaps: openvpn installs while Node is set up and dependencies install while the
+    # VPN connects. Each "Wait for ..." step joins its background job and fails with its output.
+    - name: Install OpenVPN (background)
+      run: |
+        # The image's package lists already know openvpn; refreshing them costs ~12s, so only on a miss.
+        bash "$GITHUB_ACTION_PATH/../_shared/background.sh" start openvpn-install sudo bash -c \
+          'apt-get install -y -qq --no-install-recommends openvpn || { apt-get update -qq && apt-get install -y -qq --no-install-recommends openvpn; }'
+      shell: bash
+
     - name: Checkout repository
       uses: actions/checkout@v6
 
-    # Runner images ship Node 20 in the tool cache; setup-node only resolves it from the network.
-    - name: Use cached Node.js 20
-      id: node
-      run: |
-        NODE_DIR=$(find /opt/hostedtoolcache/node -maxdepth 2 -path '*/20.*/x64' 2>/dev/null | sort -V | tail -1)
-        if [[ -x "${NODE_DIR}/bin/node" ]]; then
-          echo "${NODE_DIR}/bin" >>"$GITHUB_PATH"
-          echo "found=true" >>"$GITHUB_OUTPUT"
-          echo "Using Node.js $("${NODE_DIR}/bin/node" --version) from the tool cache"
-        fi
-      shell: bash
-
     - name: Setup Node.js
-      if: steps.node.outputs.found != 'true'
       uses: actions/setup-node@v6
       with:
         node-version: 20
 
-    # Dependencies install while the VPN comes up; "Wait for dependencies" joins it.
     - name: Install dependencies (background)
-      run: |
-        rm -f "$RUNNER_TEMP/npm-ci.exit"
-        nohup bash -c 'npm ci --no-audit --no-fund >"$RUNNER_TEMP/npm-ci.log" 2>&1; echo $? >"$RUNNER_TEMP/npm-ci.exit"' >/dev/null 2>&1 &
+      run: bash "$GITHUB_ACTION_PATH/../_shared/background.sh" start npm-ci npm ci --no-audit --no-fund
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
 
-    - name: Install OpenVPN
-      run: |
-        # The image's package lists already know openvpn; refreshing them costs ~12s, so only on a miss.
-        sudo apt-get install -y -qq --no-install-recommends openvpn >/dev/null \
-          || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends openvpn >/dev/null; }
+    - name: Wait for OpenVPN
+      run: bash "$GITHUB_ACTION_PATH/../_shared/background.sh" wait openvpn-install 180
       shell: bash
 
     - name: Set Up VPN Config
@@ -114,23 +104,7 @@ runs:
 
     - name: Wait for dependencies
       id: dependencies
-      run: |
-        DEADLINE=$((SECONDS + 300))
-        until [[ -f "$RUNNER_TEMP/npm-ci.exit" ]]; do
-          if ((SECONDS >= DEADLINE)); then
-            echo "::error title=Dependencies::npm ci did not finish within 300s"
-            exit 1
-          fi
-          sleep 1
-        done
-        if [[ "$(<"$RUNNER_TEMP/npm-ci.exit")" != 0 ]]; then
-          echo "::group::npm ci output"
-          cat "$RUNNER_TEMP/npm-ci.log"
-          echo "::endgroup::"
-          echo "::error title=Dependencies::npm ci failed: $(grep -m1 -E 'npm (ERR|error)' "$RUNNER_TEMP/npm-ci.log" || tail -1 "$RUNNER_TEMP/npm-ci.log")"
-          exit 1
-        fi
-        echo "Dependencies installed"
+      run: bash "$GITHUB_ACTION_PATH/../_shared/background.sh" wait npm-ci 300
       shell: bash
 
     - name: Run database migration

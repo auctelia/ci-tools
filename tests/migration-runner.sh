@@ -119,7 +119,25 @@ test_reports_missing_secrets_before_setup() (
   grep -q "'integration' environment" "$GITHUB_STEP_SUMMARY"
 )
 
+test_steps_aside_when_another_job_holds_the_vpn() (
+  with_network contention
+  export MIGRATION_CONTENTION_DELAY=0 VPN_LOG_PATH="${RUNNER_TEMP}/openvpn.log"
+  printf '%s\n' "Initialization Sequence Completed" "Connection reset, restarting [0]" >"$VPN_LOG_PATH"
+  sudo() { [[ "$1" == cat ]] && command cat "$2"; }
+  export -f sudo
+  MIGRATION_COMMAND=$(write_migrator contention \
+    "$(failed_with 'read ECONNRESET')" "$(failed_with 'read ECONNRESET')" "$(failed_with 'read ECONNRESET')")
+  export MIGRATION_COMMAND
+
+  if bash "$RUNNER" >"${RUNNER_TEMP}/log"; then return 1; fi
+  [[ "$(<"$ATTEMPTS_PATH")" == 3 ]]
+  grep -q "disconnecting for 0s so the other job can finish" "${RUNNER_TEMP}/log"
+  grep -q "same VPN certificate" "$GITHUB_STEP_SUMMARY"
+  grep -q "session reset" "$GITHUB_STEP_SUMMARY"
+)
+
 test_retries_a_reset_before_any_migration
+test_steps_aside_when_another_job_holds_the_vpn
 test_never_retries_a_reset_during_a_migration
 test_does_not_retry_a_migration_bug
 test_rejects_a_public_database_address
