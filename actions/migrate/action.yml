@@ -1,5 +1,5 @@
 name: 'Migrate Database'
-description: 'Run database migrations through VPN (npm run migrate)'
+description: 'Run database migrations through the VPN (npm run migrate) with retries and a readable failure report'
 
 inputs:
   app-name:
@@ -41,28 +41,60 @@ inputs:
   tars-slack-webhook-url:
     description: 'Slack webhook URL for notifications'
     required: true
+  migrate-command:
+    description: 'Migration command; use "npm run migrate:status" for a read-only dry run'
+    required: false
+    default: 'npm run migrate'
 
 runs:
   using: "composite"
   steps:
+    - name: Check migration secrets
+      run: bash "$GITHUB_ACTION_PATH/../_shared/run-migration.sh" --check-secrets
+      shell: bash
+      env:
+        PG_HOST: ${{ inputs.pg-host }}
+        PG_USER: ${{ inputs.pg-user }}
+        PG_PASSWORD: ${{ inputs.pg-password }}
+        PG_DB: ${{ inputs.pg-db }}
+        APP_NAME: ${{ inputs.app-name }}
+        DEPLOY_ENV: ${{ inputs.deploy-env }}
+
     - name: Checkout repository
       uses: actions/checkout@v6
 
+    # Runner images ship Node 20 in the tool cache; setup-node only resolves it from the network.
+    - name: Use cached Node.js 20
+      id: node
+      run: |
+        NODE_DIR=$(find /opt/hostedtoolcache/node -maxdepth 2 -path '*/20.*/x64' 2>/dev/null | sort -V | tail -1)
+        if [[ -x "${NODE_DIR}/bin/node" ]]; then
+          echo "${NODE_DIR}/bin" >>"$GITHUB_PATH"
+          echo "found=true" >>"$GITHUB_OUTPUT"
+          echo "Using Node.js $("${NODE_DIR}/bin/node" --version) from the tool cache"
+        fi
+      shell: bash
+
     - name: Setup Node.js
+      if: steps.node.outputs.found != 'true'
       uses: actions/setup-node@v6
       with:
         node-version: 20
 
-    - name: Install dependencies
-      run: npm install
+    # Dependencies install while the VPN comes up; "Wait for dependencies" joins it.
+    - name: Install dependencies (background)
+      run: |
+        rm -f "$RUNNER_TEMP/npm-ci.exit"
+        nohup bash -c 'npm ci --no-audit --no-fund >"$RUNNER_TEMP/npm-ci.log" 2>&1; echo $? >"$RUNNER_TEMP/npm-ci.exit"' >/dev/null 2>&1 &
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
 
-    - name: Install VPN dependencies
+    - name: Install OpenVPN
       run: |
-        sudo apt-get update
-        sudo apt-get install -y openvpn
+        # The image's package lists already know openvpn; refreshing them costs ~12s, so only on a miss.
+        sudo apt-get install -y -qq --no-install-recommends openvpn >/dev/null \
+          || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends openvpn >/dev/null; }
       shell: bash
 
     - name: Set Up VPN Config
@@ -76,12 +108,34 @@ runs:
         VPN_TA_KEY: ${{ inputs.vpn-ta-key }}
 
     - name: Connect to VPN
+      id: vpn
       run: bash "$GITHUB_ACTION_PATH/../_shared/connect-vpn.sh" vpn.conf
+      shell: bash
+
+    - name: Wait for dependencies
+      id: dependencies
+      run: |
+        DEADLINE=$((SECONDS + 300))
+        until [[ -f "$RUNNER_TEMP/npm-ci.exit" ]]; do
+          if ((SECONDS >= DEADLINE)); then
+            echo "::error title=Dependencies::npm ci did not finish within 300s"
+            exit 1
+          fi
+          sleep 1
+        done
+        if [[ "$(<"$RUNNER_TEMP/npm-ci.exit")" != 0 ]]; then
+          echo "::group::npm ci output"
+          cat "$RUNNER_TEMP/npm-ci.log"
+          echo "::endgroup::"
+          echo "::error title=Dependencies::npm ci failed: $(grep -m1 -E 'npm (ERR|error)' "$RUNNER_TEMP/npm-ci.log" || tail -1 "$RUNNER_TEMP/npm-ci.log")"
+          exit 1
+        fi
+        echo "Dependencies installed"
       shell: bash
 
     - name: Run database migration
       id: migration
-      run: npm run migrate
+      run: bash "$GITHUB_ACTION_PATH/../_shared/run-migration.sh"
       shell: bash
       continue-on-error: true
       env:
@@ -90,54 +144,69 @@ runs:
         PG_PASSWORD: ${{ inputs.pg-password }}
         PG_DB: ${{ inputs.pg-db }}
         PG_SSL: "true"
+        APP_NAME: ${{ inputs.app-name }}
+        DEPLOY_ENV: ${{ inputs.deploy-env }}
+        MIGRATION_COMMAND: ${{ inputs.migrate-command }}
+        VPN_CONNECT_SCRIPT: ${{ github.action_path }}/../_shared/connect-vpn.sh
 
     - name: Disconnect VPN
       if: always()
       run: |
-        sudo pkill openvpn || true
+        sudo pkill -x openvpn || true
         echo "VPN disconnected"
       shell: bash
 
     - name: Send Slack notification
       if: always()
       run: |
-        MIGRATION_OUTCOME="${{ steps.migration.outcome }}"
-
         if [[ "$MIGRATION_OUTCOME" == "success" ]]; then
           STATUS="SUCCESS"
           COLOR="good"
-          MESSAGE="Migration completed successfully"
+          FOOTER="${APPLIED:+Applied: ${APPLIED}}"
+          FOOTER="${FOOTER:-No pending migrations}"
         else
           STATUS="FAILED"
           COLOR="danger"
-          MESSAGE="Migration did not complete; no automatic down migration was run"
+          if [[ -z "$STAGE" ]]; then
+            if [[ "$VPN_OUTCOME" == "failure" ]]; then STAGE="VPN"; REASON="the tunnel did not come up"
+            elif [[ "$DEPENDENCIES_OUTCOME" == "failure" ]]; then STAGE="Dependencies"; REASON="npm ci failed"
+            else STAGE="Setup"; REASON="a setup step failed before the migration ran"
+            fi
+          fi
+          FOOTER="Failed at ${STAGE}: ${REASON}. Nothing was rolled back automatically."
         fi
 
-        PAYLOAD=$(cat << EOF
-        {
-          "attachments": [
-            {
-              "color": "${COLOR}",
-              "fields": [
-                {"title": "Migration Status", "value": "${STATUS}", "short": true},
-                {"title": "Application", "value": "${{ inputs.app-name }}", "short": true},
-                {"title": "Environment", "value": "${{ inputs.deploy-env }}", "short": true},
-                {"title": "Run", "value": "#${{ github.run_number }}", "short": true},
-                {"title": "Repository", "value": "${{ github.repository }}", "short": false},
-                {"title": "Branch", "value": "${{ github.ref_name }}", "short": true}
-              ],
-              "footer": "${MESSAGE}"
-            }
-          ]
-        }
-        EOF
-        )
+        PAYLOAD=$(jq -n \
+          --arg color "$COLOR" --arg status "$STATUS" --arg app "$APP_NAME" --arg env "$DEPLOY_ENV" \
+          --arg run "<${RUN_URL}|#${RUN_NUMBER}>" --arg repo "$REPOSITORY" --arg branch "$BRANCH" --arg footer "$FOOTER" \
+          '{attachments: [{color: $color, footer: $footer, fields: [
+            {title: "Migration Status", value: $status, short: true},
+            {title: "Application", value: $app, short: true},
+            {title: "Environment", value: $env, short: true},
+            {title: "Run", value: $run, short: true},
+            {title: "Repository", value: $repo, short: false},
+            {title: "Branch", value: $branch, short: true}
+          ]}]}')
 
-        curl -s -X POST "${{ inputs.tars-slack-webhook-url }}" \
+        curl -s -X POST "$SLACK_WEBHOOK_URL" \
           -H 'Content-type: application/json' \
-          --data "${PAYLOAD}" \
+          --data "$PAYLOAD" \
           || echo "Warning: Slack notification failed"
       shell: bash
+      env:
+        MIGRATION_OUTCOME: ${{ steps.migration.outcome }}
+        VPN_OUTCOME: ${{ steps.vpn.outcome }}
+        DEPENDENCIES_OUTCOME: ${{ steps.dependencies.outcome }}
+        STAGE: ${{ steps.migration.outputs.stage }}
+        REASON: ${{ steps.migration.outputs.reason }}
+        APPLIED: ${{ steps.migration.outputs.applied }}
+        APP_NAME: ${{ inputs.app-name }}
+        DEPLOY_ENV: ${{ inputs.deploy-env }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        RUN_NUMBER: ${{ github.run_number }}
+        REPOSITORY: ${{ github.repository }}
+        BRANCH: ${{ github.ref_name }}
+        SLACK_WEBHOOK_URL: ${{ inputs.tars-slack-webhook-url }}
 
     - name: Fail if migration failed
       if: steps.migration.outcome == 'failure'
