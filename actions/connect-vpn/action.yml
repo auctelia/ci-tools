@@ -1,0 +1,43 @@
+name: 'Connect to VPN'
+description: 'Open the CI VPN tunnel to the private network; stop it with `sudo pkill -x openvpn`'
+
+inputs:
+  vpn-conf:
+    description: "VPN configuration"
+    required: true
+  vpn-client-cert:
+    description: "VPN client certificate"
+    required: true
+  vpn-client-key:
+    description: "VPN client key"
+    required: true
+  vpn-ca-cert:
+    description: "VPN CA certificate"
+    required: true
+  vpn-ta-key:
+    description: "VPN TLS auth key"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install OpenVPN
+      run: |
+          # The image's package lists already know openvpn; refreshing them costs ~12s.
+          sudo apt-get install -y -qq --no-install-recommends openvpn >/dev/null \
+            || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends openvpn >/dev/null; }
+      shell: bash
+
+    - name: Set Up VPN Config
+      run: bash "$GITHUB_ACTION_PATH/../_shared/write-vpn-config.sh"
+      shell: bash
+      env:
+        VPN_CONFIG: ${{ inputs.vpn-conf }}
+        VPN_CLIENT_CERT: ${{ inputs.vpn-client-cert }}
+        VPN_CLIENT_KEY: ${{ inputs.vpn-client-key }}
+        VPN_CA_CERT: ${{ inputs.vpn-ca-cert }}
+        VPN_TA_KEY: ${{ inputs.vpn-ta-key }}
+
+    - name: Connect to VPN
+      run: bash "$GITHUB_ACTION_PATH/../_shared/connect-vpn.sh" vpn.conf
+      shell: bash
