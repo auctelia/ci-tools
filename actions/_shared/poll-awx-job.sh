@@ -15,6 +15,9 @@ VPN_CONNECT_SCRIPT="${VPN_CONNECT_SCRIPT:-}"
 VPN_CONFIG_PATH="${VPN_CONFIG_PATH:-vpn.conf}"
 DEADLINE=$((SECONDS + TIMEOUT))
 
+# shellcheck source=SCRIPTDIR/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
 recover_vpn() {
   if [[ -z "$VPN_CONNECT_SCRIPT" ]]; then
     return 1
@@ -75,6 +78,7 @@ while ((SECONDS < DEADLINE)); do
       ;;
     failed | error | canceled)
       echo "${OUTPUT_NAME}=failed" >>"$GITHUB_OUTPUT"
+      echo "::error title=AWX job ${AWX_JOB_ID} ${STATUS}::the playbook itself failed; open the AWX job output for the failing task"
       exit 1
       ;;
     new | pending | waiting | running)
@@ -88,5 +92,5 @@ while ((SECONDS < DEADLINE)); do
 done
 
 echo "${OUTPUT_NAME}=unknown" >>"$GITHUB_OUTPUT"
-echo "AWX job ${AWX_JOB_ID} did not reach a terminal state within ${TIMEOUT}s" >&2
+echo "::error title=Deployment unconfirmed::AWX job ${AWX_JOB_ID} did not report a final status within ${TIMEOUT}s; check it in AWX before re-running.$(vpn_contention_note)"
 exit 1

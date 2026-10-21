@@ -42,10 +42,11 @@ is_private_ipv4() {
   [[ "$1" =~ ^10\. || "$1" =~ ^192\.168\. || "$1" =~ ^172\.(1[6-9]|2[0-9]|3[01])\. ]]
 }
 
+# shellcheck source=SCRIPTDIR/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
 vpn_resets() {
-  local current
-  current=$(sudo cat "$VPN_LOG_PATH" 2>/dev/null | grep -c "Connection reset, restarting")
-  echo $((resets_before + current))
+  echo $((resets_before + $(vpn_session_resets)))
 }
 
 check_secrets() {

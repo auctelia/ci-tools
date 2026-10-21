@@ -14,6 +14,9 @@ RECOVERY_TIMEOUT="${AWX_LAUNCH_RECOVERY_TIMEOUT:-60}"
 MATCH_VARS="${AWX_MATCH_VARS:-$AWX_EXTRA_VARS}"
 VPN_CONNECT_SCRIPT="${VPN_CONNECT_SCRIPT:-}"
 VPN_CONFIG_PATH="${VPN_CONFIG_PATH:-vpn.conf}"
+# shellcheck source=SCRIPTDIR/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
 PAYLOAD=$(jq -nc --argjson extra_vars "$AWX_EXTRA_VARS" '{extra_vars: $extra_vars}')
 
 recover_vpn() {
@@ -48,6 +51,7 @@ find_matching_job() {
 }
 
 HTTP_RESPONSE=""
+LAUNCH_REASON="AWX answered without a job id"
 if HTTP_RESPONSE=$(curl -sS \
   --max-time 30 \
   --connect-timeout 10 \
@@ -68,12 +72,16 @@ if HTTP_RESPONSE=$(curl -sS \
       exit 0
     fi
   elif [[ "$HTTP_STATUS" =~ ^4[0-9][0-9]$ ]]; then
-    echo "AWX rejected the launch with HTTP ${HTTP_STATUS}: ${HTTP_BODY}" >&2
+    echo "::error title=Deploy failed: AWX rejected the launch::HTTP ${HTTP_STATUS}: ${HTTP_BODY}"
     exit 1
+  else
+    LAUNCH_REASON="AWX answered HTTP ${HTTP_STATUS}"
   fi
+else
+  LAUNCH_REASON=$(curl_reason "$?")
 fi
 
-echo "The launch response was lost; looking up the matching AWX job"
+echo "::warning title=AWX launch response lost::${LAUNCH_REASON}; looking up the matching AWX job"
 DEADLINE=$((SECONDS + RECOVERY_TIMEOUT))
 
 while ((SECONDS < DEADLINE)); do
@@ -88,5 +96,5 @@ while ((SECONDS < DEADLINE)); do
   sleep 5
 done
 
-echo "Could not recover a matching AWX job after ${RECOVERY_TIMEOUT}s" >&2
+echo "::error title=Deploy failed: AWX unreachable::the launch failed (${LAUNCH_REASON}) and no matching AWX job was found within ${RECOVERY_TIMEOUT}s.$(vpn_contention_note)"
 exit 1
